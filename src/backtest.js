@@ -34,7 +34,7 @@ export async function handleBacktestRequest(req, env, ctx){
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v732_sizing_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
+      new URL(`/__backtest_v733_diag_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -79,7 +79,7 @@ const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",requestUrl}={}){
   const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3.2-ha-sizing",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
+  if(!prep.complete) return {pending:true,version:"7.3.3-diagnostics",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
   let results, variants;
   if(strategy==="short"){
@@ -102,7 +102,7 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
   }
   results=results.map(applyPositionSizing);
   const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3.2-ha-sizing",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
+  return {ok:true,symbol,version:"7.3.3-diagnostics",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U保證金；上一單盈利：下一單使用當前本金5%作保證金"},
     sharedRules:strategy==="short"?{
       regime:"V7.3.2 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
@@ -161,16 +161,49 @@ function backtestPage(r){
    const queryKey = k==='tradeMode' ? 'mode' : k==='costBps' ? 'costbps' : k==='stopMode' ? 'stop' : k;
    return `<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[queryKey]:x})}">${lab(x)}</a>`;
  }).join('');
+ const fmtTs=ts=>{
+   if(!Number.isFinite(Number(ts)))return "-";
+   try{return new Date(Number(ts)).toLocaleString("zh-TW",{timeZone:"Asia/Taipei",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});}
+   catch{return "-";}
+ };
+ const num=(v,d=3)=>Number.isFinite(Number(v))?Number(v).toFixed(d):"-";
  const cards=ids.map(id=>{
    const x=by[id]||{},l=x.leverage||{},d=x.diagnostics||{};
-   const diagnostics=r.strategy==='short'?`<details><summary>🔬 訊號診斷</summary><div class="diag">
-      <span>Sweep多<b>${d.sweepLong||0}</b></span><span>BOS多<b>${d.bosLong||0}</b></span>
-      <span>Retest多<b>${d.retestLong||0}</b></span><span>進場多<b>${d.longSignals||0}</b></span>
-      <span>Sweep空<b>${d.sweepShort||0}</b></span><span>BOS空<b>${d.bosShort||0}</b></span>
-      <span>Retest空<b>${d.retestShort||0}</b></span><span>進場空<b>${d.shortSignals||0}</b></span>
-      <span>過期<b>${d.expiredSetup||0}</b></span><span>Chop<b>${d.chop||0}</b></span><span>Transition<b>${d.transition||0}</b></span><span>切換<b>${d.regimeSwitches||0}</b></span>
-      <span>日損擋<b>${d.blockedDaily||0}</b></span><span>冷卻擋<b>${d.blockedCooldown||0}</b></span>
-   </div></details>`:'';
+   const tradeRows=(x.__trades||x.recentTrades||[]).map((t,i)=>{
+     const rVal=Number(t.r)||0,pnl=Number(t.pnlU)||0;
+     const result=rVal>0.02?"盈利":rVal<-.02?"虧損":"打平";
+     const resultClass=rVal>0.02?"p":rVal<-.02?"n":"";
+     const stop=t.initialStop??t.stop;
+     return `<tr>
+       <td>${i+1}</td>
+       <td>${fmtTs(t.entryTs)}</td>
+       <td class="${t.side==="LONG"?"p":"n"}">${t.side==="LONG"?"多":"空"}</td>
+       <td>${num(t.entry,4)}</td>
+       <td>${num(stop,4)}</td>
+       <td>${num(t.exitPrice??t.exit,4)}</td>
+       <td class="${resultClass}">${rVal>=0?"+":""}${num(rVal,2)}R</td>
+       <td class="${pnl>=0?"p":"n"}">${pnl>=0?"+":""}${num(pnl,3)}U</td>
+       <td class="${resultClass}">${result}${t.forcedClose?"*":""}</td>
+     </tr>`;
+   }).join('');
+   const tradeTable=tradeRows?`<div class="tradebox">
+     <div class="tradehead">逐筆交易 <small>時間為台灣時間；* = 回測期末強制平倉</small></div>
+     <div class="scroll"><table>
+       <thead><tr><th>#</th><th>時間</th><th>方向</th><th>Entry</th><th>Stop</th><th>Exit</th><th>R</th><th>PnL</th><th>結果</th></tr></thead>
+       <tbody>${tradeRows}</tbody>
+     </table></div>
+   </div>`:`<div class="empty">此策略區間沒有交易。</div>`;
+   const diagnostics=r.strategy==='short'?`<details><summary>🔬 訊號診斷</summary>
+     <div class="diag">
+       <span>Sweep多<b>${d.sweepLong||0}</b></span><span>BOS多<b>${d.bosLong||0}</b></span>
+       <span>Retest多<b>${d.retestLong||0}</b></span><span>進場多<b>${d.longSignals||0}</b></span>
+       <span>Sweep空<b>${d.sweepShort||0}</b></span><span>BOS空<b>${d.bosShort||0}</b></span>
+       <span>Retest空<b>${d.retestShort||0}</b></span><span>進場空<b>${d.shortSignals||0}</b></span>
+       <span>過期<b>${d.expiredSetup||0}</b></span><span>Chop<b>${d.chop||0}</b></span>
+       <span>Transition<b>${d.transition||0}</b></span><span>切換<b>${d.regimeSwitches||0}</b></span>
+       <span>日損擋<b>${d.blockedDaily||0}</b></span><span>冷卻擋<b>${d.blockedCooldown||0}</b></span>
+     </div>${tradeTable}
+   </details>`:'';
    return`<section class="card">
      <div class="ctop"><div><h2>${x.name||id}</h2><p>${x.description||''}</p></div><b class="net ${x.netR>=0?'p':'n'}">${x.netR>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</b></div>
      <div class="g">
@@ -188,7 +221,7 @@ function backtestPage(r){
    </section>`
  }).join('');
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
- <title>${r.symbol} V7.3.2 HA Compact</title>
+ <title>${r.symbol} V7.3.3 Diagnostics</title>
  <style>
  *{box-sizing:border-box}
  body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
@@ -209,7 +242,7 @@ function backtestPage(r){
  .card h2{font-size:16px;line-height:1.1;margin:0 0 2px}
  .card p{color:#91a0b5;font-size:10px;line-height:1.25;margin:0}
  .net{font-size:19px;white-space:nowrap;line-height:1}
- .p{color:#58d99b}.n{color:#ff7e87}
+ .p{color:#58d99b!important}.n{color:#ff7e87!important}
  .g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:7px}
  .g div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px 7px;min-height:43px}
  .g small{display:block;color:#8190a6;font-size:9px;line-height:1.1;margin-bottom:2px}
@@ -219,10 +252,20 @@ function backtestPage(r){
  .diag{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin-top:5px}
  .diag span{background:#0b1420;border:1px solid #202d42;border-radius:7px;padding:5px;color:#8190a6;font-size:9px}
  .diag b{display:block;color:#fff;font-size:11px;margin-top:1px}
+ .tradebox{margin-top:7px;border-top:1px solid #263348;padding-top:7px}
+ .tradehead{font-size:10px;font-weight:700;color:#d7deea;margin-bottom:5px}
+ .tradehead small{font-weight:400;color:#8190a6;margin-left:4px}
+ .scroll{overflow:auto;max-height:360px;border:1px solid #202d42;border-radius:8px;background:#0b1420}
+ table{border-collapse:collapse;width:100%;min-width:650px;font-size:9px}
+ th,td{padding:6px 7px;text-align:right;border-bottom:1px solid #1e2a3d;white-space:nowrap}
+ th{position:sticky;top:0;background:#101b29;color:#8190a6;font-weight:700;z-index:1}
+ th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){text-align:left}
+ tbody tr:last-child td{border-bottom:0}
+ .empty{margin-top:6px;color:#8190a6;font-size:9px}
  @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
  </style></head><body><main class="wrap">
  <section class="hero">
-   <div class="ey">V7.3.2 HA · ${r.symbol} · 固定10x</div>
+   <div class="ey">V7.3.3 DIAG · ${r.symbol} · 固定10x</div>
    <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
    <div class="sub">${r.days}天 · 100U本金 · 5U保證金 · 10x · 成本 ${r.costBps}bps</div>
    <div class="ctl">
@@ -235,7 +278,7 @@ function backtestPage(r){
    </div>
  </section>
  <section class="note">${r.strategy==='short'
-   ?`V7.3.2 HA Router：1H/15m 平均K判斷方向；Bull 只做多、Bear 只做空、Transition / Chop 不交易；5m 使用真實K執行 BOS → Retest，Sweep 為加分條件、不再強制。止損只保留 C。第一單/上一單非盈利用5U保證金；上一單盈利則下一單用當前本金5%保證金。`
+   ?`V7.3.2 HA Router 策略邏輯保持不變；本版只升級診斷。1H/15m 平均K判斷方向，5m 真實K執行 BOS → Retest，止損 C。第一單/上一單非盈利用5U保證金；上一單盈利則下一單用當前本金5%保證金。`
    :'波段 C 系列保持既有邏輯，不參與短線重做。'}
  </section>
  ${cards}
@@ -434,7 +477,7 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
 
   return{variant:v.id,name:v.name,description:v.description,...summarizeTradeSequence(ts,10),diagnostics:diag,recentTrades:ts.slice(-10),__trades:ts};
 }
-function makeShortV72R2(side,entry,risk,stop,entryTs,stopMode){const d=side==="LONG"?1:-1;return{side,entry,entryTs,risk,stop,stopMode,tp1:entry+d*risk,tp2:entry+d*risk*2,rem:1,real:0,tp1Hit:false,tp2Hit:false,trail:null};}
+function makeShortV72R2(side,entry,risk,stop,entryTs,stopMode){const d=side==="LONG"?1:-1;return{side,entry,entryTs,risk,stop,initialStop:stop,stopMode,tp1:entry+d*risk,tp2:entry+d*risk*2,rem:1,real:0,tp1Hit:false,tp2Hit:false,trail:null};}
 function manageShortV72R2(p,x){
   const L=p.side==="LONG";
   // Conservative ordering: if SL and TP are both touched in one candle, SL wins.
