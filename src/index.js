@@ -368,9 +368,86 @@ function backtestPage(r){
  const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x])),ids=r.strategy==="short"?["SL3","SS3","SCOMB3"]:["C0","CL2","CS2","COMB"];
  const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"D",...e});return`/backtest?${q}`};
  const btn=(a,k,lab=x=>x)=>a.map(x=>`<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[k==='tradeMode'?'mode':k]:x})}">${lab(x)}</a>`).join('');
- const cards=ids.map(id=>{const x=by[id]||{},l=x.leverage||{},d=x.diagnostics||{};const diagnostics=r.strategy==='short'?`<details><summary>🔬 訊號診斷</summary><div class="diag"><span>Sweep 多 <b>${d.sweepLong||0}</b></span><span>BOS 多 <b>${d.bosLong||0}</b></span><span>Retest 多 <b>${d.retestLong||0}</b></span><span>進場多 <b>${d.longSignals||0}</b></span><span>Sweep 空 <b>${d.sweepShort||0}</b></span><span>BOS 空 <b>${d.bosShort||0}</b></span><span>Retest 空 <b>${d.retestShort||0}</b></span><span>進場空 <b>${d.shortSignals||0}</b></span><span>Setup 過期 <b>${d.expiredSetup||0}</b></span><span>Chop 擋單 <b>${d.chop||0}</b></span><span>日損擋單 <b>${d.blockedDaily||0}</b></span><span>冷卻擋單 <b>${d.blockedCooldown||0}</b></span></div></details>`:'';return`<section class="card"><h2>${x.name||id}<b class="${x.netR>=0?'p':'n'}">${x.netR>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</b></h2><p>${x.description||''}</p><div class="g"><div>交易<b>${x.trades||0}</b></div><div>勝率<b>${Number(x.winRate||0).toFixed(1)}%</b></div><div>PF<b>${Number(x.profitFactor||0).toFixed(2)}</b></div><div>最大回撤<b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div><div>最大連敗<b>${x.maxLossStreak||0}</b></div><div>100U →<b>${Number(x.endingEquity||100).toFixed(2)}U</b></div><div>多單<b>${x.long?.trades||0} / ${Number(x.long?.netR||0).toFixed(2)}R</b></div><div>空單<b>${x.short?.trades||0} / ${Number(x.short?.netR||0).toFixed(2)}R</b></div><div>10x平均保證金<b>${Number(l.avgMarginPct||0).toFixed(1)}%</b></div><div>10x最高保證金<b>${Number(l.maxMarginPct||0).toFixed(1)}%</b></div></div>${diagnostics}</section>`}).join('');
- return`<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{background:#0b0f17;color:#f5f7fb;font-family:system-ui;margin:auto;max-width:780px;padding:12px}.hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:18px;padding:15px;margin:10px 0}.btn{display:flex;gap:7px;flex-wrap:wrap;margin:6px 0 12px}.btn a{color:#eee;text-decoration:none;border:1px solid #34435c;border-radius:9px;padding:7px}.btn a.on{background:#eee;color:#111}.g{display:grid;grid-template-columns:1fr 1fr;gap:7px}.g div,.diag span{background:#0b1420;padding:9px;border-radius:10px;color:#91a0b5}.g b,.diag b{display:block;color:#fff}.p{color:#58d99b;float:right}.n{color:#ff7e87;float:right}p{color:#91a0b5}.diag{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}summary{margin-top:12px;cursor:pointer}</style><div class="hero"><small>V7.2-R2 · ${r.symbol} · 固定 10x</small><h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1><p>${r.days}天 · 成本 ${r.costBps}bps</p><b>模式</b><div class="btn">${btn(['swing','short'],'strategy',x=>x==='swing'?'🧭波段':'⚡短線')}</div><b>幣種</b><div class="btn">${btn(BACKTEST_SYMBOLS,'symbol',x=>x.replace('USDT',''))}</div><b>期間</b><div class="btn">${btn([7,14,30,90,180,365],'days',x=>x===365?'1年':x+'天')}</div><b>方向</b><div class="btn">${btn(['both','long','short'],'tradeMode',x=>x==='both'?'多＋空':x==='long'?'只多':'只空')}</div><b>成本</b><div class="btn">${btn([0,8,12,20],'costBps',x=>x+'bps')}</div>${r.strategy==='short'?`<b>止損模型</b><div class="btn">${btn(['A','B','C','D','E'],'stopMode',x=>x)}</div>`:''}</div><div class="note">${r.strategy==='short'?`新版流程：1H Regime + 15m Structure → 5m Sweep → BOS → 第一個 Retest → 下一根進場。預設 D = Sweep 結構點 + 0.30 ATR。固定每筆帳戶風險 0.5%，止損越寬倉位越小。`:'波段 C 系列保持既有邏輯，不參與本次短線重做。'}</div>${cards}</html>`}
-
+ const cards=ids.map(id=>{
+   const x=by[id]||{},l=x.leverage||{},d=x.diagnostics||{};
+   const diagnostics=r.strategy==='short'?`<details><summary>🔬 訊號診斷</summary><div class="diag">
+      <span>Sweep多<b>${d.sweepLong||0}</b></span><span>BOS多<b>${d.bosLong||0}</b></span>
+      <span>Retest多<b>${d.retestLong||0}</b></span><span>進場多<b>${d.longSignals||0}</b></span>
+      <span>Sweep空<b>${d.sweepShort||0}</b></span><span>BOS空<b>${d.bosShort||0}</b></span>
+      <span>Retest空<b>${d.retestShort||0}</b></span><span>進場空<b>${d.shortSignals||0}</b></span>
+      <span>過期<b>${d.expiredSetup||0}</b></span><span>Chop<b>${d.chop||0}</b></span>
+      <span>日損擋<b>${d.blockedDaily||0}</b></span><span>冷卻擋<b>${d.blockedCooldown||0}</b></span>
+   </div></details>`:'';
+   return`<section class="card">
+     <div class="ctop"><div><h2>${x.name||id}</h2><p>${x.description||''}</p></div><b class="net ${x.netR>=0?'p':'n'}">${x.netR>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</b></div>
+     <div class="g">
+       <div><small>交易</small><b>${x.trades||0}</b></div>
+       <div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div>
+       <div><small>PF</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div>
+       <div><small>回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div>
+       <div><small>連敗</small><b>${x.maxLossStreak||0}</b></div>
+       <div><small>100U→</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div>
+       <div><small>🟢 多</small><b>${x.long?.trades||0} / ${Number(x.long?.netR||0).toFixed(2)}R</b></div>
+       <div><small>🔴 空</small><b>${x.short?.trades||0} / ${Number(x.short?.netR||0).toFixed(2)}R</b></div>
+       <div><small>10x平均保證金</small><b>${Number(l.avgMarginPct||0).toFixed(1)}%</b></div>
+       <div><small>10x最高保證金</small><b>${Number(l.maxMarginPct||0).toFixed(1)}%</b></div>
+     </div>${diagnostics}
+   </section>`
+ }).join('');
+ return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+ <title>${r.symbol} V7.2 Compact</title>
+ <style>
+ *{box-sizing:border-box}
+ body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
+ .wrap{max-width:760px;margin:auto}
+ .hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:13px}
+ .hero{padding:10px 11px;margin:0 0 6px}
+ .ey{color:#91a0b5;font-size:10px;line-height:1.2}
+ h1{font-size:20px;line-height:1.1;margin:5px 0 3px}
+ .sub{color:#91a0b5;font-size:11px;margin:0 0 6px}
+ .ctl{display:grid;grid-template-columns:42px 1fr;align-items:start;gap:3px 6px;margin-top:2px}
+ .ctl>span{font-size:10px;color:#a7b3c6;font-weight:700;line-height:26px}
+ .btn{display:flex;gap:4px;flex-wrap:wrap;margin:1px 0}
+ .btn a{color:#e9edf4;text-decoration:none;border:1px solid #34435c;border-radius:7px;padding:4px 7px;font-size:11px;line-height:1.1;min-height:26px;display:flex;align-items:center}
+ .btn a.on{background:#f4f6f8;color:#111827;border-color:#f4f6f8}
+ .note{padding:8px 10px;margin:0 0 6px;color:#a7b3c6;font-size:10px;line-height:1.45}
+ .card{padding:10px;margin:0 0 6px}
+ .ctop{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+ .card h2{font-size:16px;line-height:1.1;margin:0 0 2px}
+ .card p{color:#91a0b5;font-size:10px;line-height:1.25;margin:0}
+ .net{font-size:19px;white-space:nowrap;line-height:1}
+ .p{color:#58d99b}.n{color:#ff7e87}
+ .g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:7px}
+ .g div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px 7px;min-height:43px}
+ .g small{display:block;color:#8190a6;font-size:9px;line-height:1.1;margin-bottom:2px}
+ .g b{display:block;color:#fff;font-size:12px;line-height:1.15;overflow-wrap:anywhere}
+ details{margin-top:6px}
+ summary{cursor:pointer;color:#cbd5e1;font-size:10px}
+ .diag{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin-top:5px}
+ .diag span{background:#0b1420;border:1px solid #202d42;border-radius:7px;padding:5px;color:#8190a6;font-size:9px}
+ .diag b{display:block;color:#fff;font-size:11px;margin-top:1px}
+ @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
+ </style></head><body><main class="wrap">
+ <section class="hero">
+   <div class="ey">V7.2-R2 · ${r.symbol} · 固定10x</div>
+   <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
+   <div class="sub">${r.days}天 · 成本 ${r.costBps}bps</div>
+   <div class="ctl">
+     <span>模式</span><div class="btn">${btn(['swing','short'],'strategy',x=>x==='swing'?'🧭波段':'⚡短線')}</div>
+     <span>幣種</span><div class="btn">${btn(BACKTEST_SYMBOLS,'symbol',x=>x.replace('USDT',''))}</div>
+     <span>期間</span><div class="btn">${btn([7,14,30,90,180,365],'days',x=>x===365?'1年':x+'天')}</div>
+     <span>方向</span><div class="btn">${btn(['both','long','short'],'tradeMode',x=>x==='both'?'多＋空':x==='long'?'只多':'只空')}</div>
+     <span>成本</span><div class="btn">${btn([0,8,12,20],'costBps',x=>x+'bps')}</div>
+     ${r.strategy==='short'?`<span>止損</span><div class="btn">${btn(['A','B','C','D','E'],'stopMode',x=>x)}</div>`:''}
+   </div>
+ </section>
+ <section class="note">${r.strategy==='short'
+   ?`1H Regime + 15m Structure → 5m Sweep → BOS → Retest → 下一根進場。D = Sweep 結構點 + 0.30 ATR。每筆風險 0.5%。`
+   :'波段 C 系列保持既有邏輯，不參與短線重做。'}
+ </section>
+ ${cards}
+ </main></body></html>`
+}
 function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.2-R2 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
 function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?symbol=SOLUSDT&days=30&mode=both&leverage=10&strategy=short">重試 30 天</a></p></body></html>`}
