@@ -17,16 +17,18 @@ export default {
 
     if (u.pathname === "/backtest" || u.pathname === "/backtest/api") {
       try {
-        const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 365);
+        const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 1825);
+        const modeRaw = String(u.searchParams.get("mode") || "both").toLowerCase();
+        const mode = ["both","long","short"].includes(modeRaw) ? modeRaw : "both";
         const cache = caches.default;
-        const cacheKey = new Request(new URL(`/__backtest_cache?days=${days}`, req.url).toString(), {method:"GET"});
+        const cacheKey = new Request(new URL(`/__backtest_cache?days=${days}&mode=${mode}`, req.url).toString(), {method:"GET"});
         const cached = await cache.match(cacheKey);
         let result, cacheState;
         if (cached) {
           result = await cached.json();
           cacheState = "HIT";
         } else {
-          result = await runBacktest({days});
+          result = await runBacktest({days, mode});
           cacheState = "MISS";
           await cache.put(cacheKey, new Response(JSON.stringify(result), {
             headers:{"content-type":"application/json","cache-control":"public, max-age=900"}
@@ -289,7 +291,7 @@ function page(r){
 </style></head><body><main class="w"><section class="hero"><div class="ey">SOL TECHNICAL DASHBOARD</div><div class="top"><div><h1>SOLUSDT Perpetual</h1><div class="price">$${r.price.toFixed(2)}</div></div><div class="badge">${r.overall}</div></div><div class="meta">Bybit SOLUSDT Perpetual · 更新 <span id="t"></span></div></section><h2 class="section">多週期 EMA / RSI</h2><section class="cards">${cards}</section><div class="links"><a href="/api">API JSON</a><a href="/health">Health</a></div><div class="foot">EMA 使用 SMA seed 後標準 EMA 遞迴；RSI 使用 Wilder 平滑。技術指標來源為 Bybit SOLUSDT 永續，與 Binance SOLUSDC 實際成交價可能略有差異。</div></main><script>document.getElementById("t").textContent=new Date(${JSON.stringify(r.updatedAt)}).toLocaleString("zh-TW",{timeZone:"Asia/Taipei",hour12:false});let n=5;const m=document.querySelector(".meta");const c=document.createElement("span");c.id="count";c.textContent=" · 🔄 "+n+" 秒後更新";m.appendChild(c);const timer=setInterval(()=>{n--;c.textContent=" · 🔄 "+n+" 秒後更新";if(n<=0){clearInterval(timer);location.reload()}},1000)</script></body></html>`;
 }
 
-async function runBacktest({days=30}={}) {
+async function runBacktest({days=30, mode="both"}={}) {
   // Use Bybit linear SOLUSDT first: up to 1000 candles per request, which
   // dramatically reduces request count. OKX is a throttled fallback only.
   const m15Data = await fetchHistory("15", days);
@@ -318,7 +320,7 @@ async function runBacktest({days=30}={}) {
     }
   ];
 
-  const results = variants.map(v => simulateVariant(tf15, tf1h, v));
+  const results = variants.map(v => simulateVariant(tf15, tf1h, v, mode));
   const eligiblePF = results.filter(x=>x.trades>=5);
   const byNetR = [...results].sort((a,b)=>b.netR-a.netR)[0]?.variant || null;
   const byPF = [...eligiblePF].sort((a,b)=>b.profitFactor-a.profitFactor)[0]?.variant || null;
@@ -331,6 +333,7 @@ async function runBacktest({days=30}={}) {
     source:{m15:m15Data.source,h1:h1Data.source},
     mode:"ABC synchronized comparison V2",
     days,
+    tradeMode:mode,
     candles:{m15:m15.length,h1:h1.length},
     sharedRules:{
       entry:"signal candle closes; enter next candle open",
@@ -350,19 +353,21 @@ async function runBacktest({days=30}={}) {
 
 
 function backtestPage(r){
-  const esc=x=>String(x??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const esc=x=>String(x??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const names={A:"A 嚴格版",B:"B 平衡版",C:"C 趨勢版"};
   const resultById=Object.fromEntries((r.results||[]).map(x=>[x.variant,x]));
-  const cards=["A","B","C"].map(id=>{const x=resultById[id]||{};return `<article class="card"><div class="cardtop"><div><span class="tag">${esc(id)}</span><h2>${names[id]}</h2></div><div class="net ${Number(x.netR)>=0?'pos':'neg'}">${Number(x.netR)>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</div></div><div class="stats"><div><small>交易次數</small><b>${x.trades??0}</b></div><div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div><div><small>Profit Factor</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div><div><small>最大回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div><div><small>最大連敗</small><b>${x.maxLossStreak??0}</b></div><div><small>100U →</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div></div><details><summary>最近交易</summary><div class="trades">${(x.recentTrades||[]).slice().reverse().map(t=>`<div><span>${t.side==='LONG'?'🟢 多':'🔴 空'}</span><span>${Number(t.r)>=0?'+':''}${Number(t.r).toFixed(2)}R</span></div>`).join('')||'沒有交易'}</div></details></article>`}).join('');
+  const cards=["A","B","C"].map(id=>{const x=resultById[id]||{};return `<article class="card"><div class="cardtop"><div><span class="tag">${esc(id)}</span><h2>${names[id]}</h2></div><div class="net ${Number(x.netR)>=0?'pos':'neg'}">${Number(x.netR)>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</div></div><div class="stats"><div><small>交易次數</small><b>${x.trades??0}</b></div><div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div><div><small>Profit Factor</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div><div><small>最大回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div><div><small>最大連敗</small><b>${x.maxLossStreak??0}</b></div><div><small>100U →</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div><div><small>🟢 多單</small><b>${x.long?.trades??0}筆 · ${Number(x.long?.netR||0)>=0?'+':''}${Number(x.long?.netR||0).toFixed(2)}R</b></div><div><small>🔴 空單</small><b>${x.short?.trades??0}筆 · ${Number(x.short?.netR||0)>=0?'+':''}${Number(x.short?.netR||0).toFixed(2)}R</b></div></div><details><summary>最近交易</summary><div class="trades">${(x.recentTrades||[]).slice().reverse().map(t=>`<div><span>${t.side==='LONG'?'🟢 多':'🔴 空'}</span><span>${Number(t.r)>=0?'+':''}${Number(t.r).toFixed(2)}R</span></div>`).join('')||'沒有交易'}</div></details></article>`}).join('');
   const lb=r.leaderboard||{};
   const leader=(id)=>id?`${id} · ${names[id]||id}`:'樣本不足';
-  const buttons=[30,90,180,365].map(d=>`<a class="${Number(r.days)===d?'on':''}" href="/backtest?days=${d}">${d===365?'1年':d+'天'}</a>`).join('');
-  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0f17"><title>SOL ABC 回測</title><style>*{box-sizing:border-box}body{margin:0;background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif}.w{max-width:900px;margin:auto;padding:16px 12px 40px}.hero,.card,.leader{background:#121925;border:1px solid #263246;border-radius:20px}.hero{padding:18px}.ey,small,.muted{color:#8995a8}.ey{font-size:12px;letter-spacing:.08em}.hero h1{margin:6px 0 4px;font-size:25px}.period{display:flex;gap:8px;overflow:auto;margin-top:15px}.period a{color:#dce4f1;text-decoration:none;padding:9px 13px;border:1px solid #2a374c;border-radius:12px;white-space:nowrap}.period a.on{background:#f5f7fb;color:#0b0f17;font-weight:800}.leader{padding:15px;margin-top:12px;display:grid;gap:9px}.leader div{display:flex;justify-content:space-between;gap:12px}.leader b{text-align:right}.cards{display:grid;gap:12px;margin-top:12px}.card{padding:16px}.cardtop{display:flex;justify-content:space-between;align-items:start;gap:10px}.card h2{font-size:18px;margin:5px 0}.tag{display:inline-block;background:#0d1420;border:1px solid #2a374c;border-radius:8px;padding:3px 8px;font-weight:800}.net{font-size:25px;font-weight:900}.pos{color:#69e6a6}.neg{color:#ff8585}.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:13px}.stats div{background:#0d1420;border:1px solid #202c3f;border-radius:13px;padding:11px}.stats small{display:block;font-size:11px;margin-bottom:4px}.stats b{font-size:17px}details{margin-top:12px}summary{cursor:pointer;color:#cbd5e1}.trades{margin-top:8px;background:#0d1420;border-radius:12px;padding:8px 11px}.trades div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #202c3f}.trades div:last-child{border:0}.foot{font-size:12px;line-height:1.65;color:#8995a8;margin:14px 3px}.foot a{color:#cbd5e1}@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}.stats{grid-template-columns:1fr 1fr}}</style></head><body><main class="w"><section class="hero"><div class="ey">SOLUSDT · ABC BACKTEST</div><h1>📊 策略回測儀表板</h1><div class="muted">${r.days} 天 · 15m + 1h · ${esc(r.source?.m15||'')}</div><nav class="period">${buttons}</nav></section><section class="leader"><div><span>🏆 淨 R 最高</span><b>${leader(lb.bestByNetR)}</b></div><div><span>⚡ PF 最高</span><b>${leader(lb.bestByProfitFactor)}</b></div><div><span>🛡️ 回撤最低</span><b>${leader(lb.lowestDrawdown)}</b></div></section><section class="cards">${cards}</section><div class="foot">風控：每筆 0.5% · SL 1.5 ATR · TP1 1R/30% · TP2 2R/30% · Runner 40%。同根碰 SL/TP 採止損優先。資料快取：${esc(r.cache)}。<br><a href="/backtest/api?days=${r.days}">查看原始 JSON API</a> · <a href="/">返回 SOL Dashboard</a></div></main></body></html>`;
+  const buttons=[30,90,180,365,730,1095,1825].map(d=>`<a class="${Number(r.days)===d?'on':''}" href="/backtest?days=${d}&mode=${r.tradeMode||'both'}">${d===365?'1年':d===730?'2年':d===1095?'3年':d===1825?'5年':d+'天'}</a>`).join('');
+  const modes=[["both","多＋空"],["long","只做多"],["short","只做空"]].map(([m,l])=>`<a class="${(r.tradeMode||'both')===m?'on':''}" href="/backtest?days=${r.days}&mode=${m}">${l}</a>`).join('');
+  const modeLabel=(r.tradeMode||"both")==="both"?"雙向多空":r.tradeMode==="long"?"只做多":"只做空";
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0f17"><title>SOL ABC 雙向回測</title><style>*{box-sizing:border-box}body{margin:0;background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif}.w{max-width:900px;margin:auto;padding:16px 12px 40px}.hero,.card,.leader{background:#121925;border:1px solid #263246;border-radius:20px}.hero{padding:18px}.ey,small,.muted{color:#8995a8}.ey{font-size:12px;letter-spacing:.08em}.hero h1{margin:6px 0 4px;font-size:25px}.period{display:flex;gap:8px;overflow:auto;margin-top:12px}.period a{color:#dce4f1;text-decoration:none;padding:9px 13px;border:1px solid #2a374c;border-radius:12px;white-space:nowrap}.period a.on{background:#f5f7fb;color:#0b0f17;font-weight:800}.leader{padding:15px;margin-top:12px;display:grid;gap:9px}.leader div{display:flex;justify-content:space-between;gap:12px}.leader b{text-align:right}.cards{display:grid;gap:12px;margin-top:12px}.card{padding:16px}.cardtop{display:flex;justify-content:space-between;align-items:start;gap:10px}.card h2{font-size:18px;margin:5px 0}.tag{display:inline-block;background:#0d1420;border:1px solid #2a374c;border-radius:8px;padding:3px 8px;font-weight:800}.net{font-size:25px;font-weight:900}.pos{color:#69e6a6}.neg{color:#ff8585}.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:13px}.stats div{background:#0d1420;border:1px solid #202c3f;border-radius:13px;padding:11px}.stats small{display:block;font-size:11px;margin-bottom:4px}.stats b{font-size:16px}details{margin-top:12px}summary{cursor:pointer;color:#cbd5e1}.trades{margin-top:8px;background:#0d1420;border-radius:12px;padding:8px 11px}.trades div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #202c3f}.trades div:last-child{border:0}.foot{font-size:12px;line-height:1.65;color:#8995a8;margin:14px 3px}.foot a{color:#cbd5e1}@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}}</style></head><body><main class="w"><section class="hero"><div class="ey">SOLUSDT · ABC LONG / SHORT BACKTEST</div><h1>📊 雙向策略回測</h1><div class="muted">${r.days} 天 · ${modeLabel} · 15m + 1h · ${esc(r.source?.m15||'')}</div><nav class="period">${buttons}</nav><nav class="period">${modes}</nav></section><section class="leader"><div><span>🏆 淨 R 最高</span><b>${leader(lb.bestByNetR)}</b></div><div><span>⚡ PF 最高</span><b>${leader(lb.bestByProfitFactor)}</b></div><div><span>🛡️ 回撤最低</span><b>${leader(lb.lowestDrawdown)}</b></div></section><section class="cards">${cards}</section><div class="foot">風控：每筆 0.5% · SL 1.5 ATR · TP1 1R/30% · TP2 2R/30% · Runner 40%。同根碰 SL/TP 採止損優先。5 年首次回測需抓取大量 15m K 線，會比短週期明顯更久。<br><a href="/backtest/api?days=${r.days}&mode=${r.tradeMode||'both'}">查看原始 JSON API</a> · <a href="/">返回 SOL Dashboard</a></div></main></body></html>`;
 }
 
 function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?days=30">重試 30 天</a></p></body></html>`}
 
-function simulateVariant(tf15, tf1h, variant) {
+function simulateVariant(tf15, tf1h, variant, mode="both") {
   const h1ByTs = tf1h.map(x => [x.ts, x]);
   let hIdx = 0;
   let equity = 100, peak = 100, maxDD = 0;
@@ -443,6 +448,8 @@ function simulateVariant(tf15, tf1h, variant) {
       shortSignal = shortTrend && pullbackShort && breakShort && momentumShort;
     }
 
+    if (mode === "long") shortSignal = false;
+    if (mode === "short") longSignal = false;
     const side = longSignal ? "LONG" : shortSignal ? "SHORT" : null;
     if (!side) continue;
 
@@ -456,6 +463,12 @@ function simulateVariant(tf15, tf1h, variant) {
   const total = trades.length;
   const pf = grossLossR > 0 ? grossWinR / grossLossR : (grossWinR > 0 ? 999 : 0);
   const netR = trades.reduce((a,t)=>a+t.r,0);
+  const sideStats = side => {
+    const xs = trades.filter(t=>t.side===side);
+    const w = xs.filter(t=>t.r>0.02), l = xs.filter(t=>t.r<-0.02);
+    const gw = w.reduce((a,t)=>a+t.r,0), gl = l.reduce((a,t)=>a+(-t.r),0);
+    return {trades:xs.length,wins:w.length,losses:l.length,winRate:xs.length?+(w.length/xs.length*100).toFixed(2):0,profitFactor:+(gl>0?gw/gl:(gw>0?999:0)).toFixed(2),netR:+xs.reduce((a,t)=>a+t.r,0).toFixed(2)};
+  };
   return {
     variant:variant.id,
     name:variant.name,
@@ -468,6 +481,8 @@ function simulateVariant(tf15, tf1h, variant) {
     endingEquity:+equity.toFixed(2),
     maxDrawdownPct:+maxDD.toFixed(2),
     maxLossStreak,
+    long:sideStats("LONG"),
+    short:sideStats("SHORT"),
     recentTrades:trades.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:+t.entry.toFixed(4),exit:+t.exitPrice.toFixed(4),r:t.r}))
   };
 }
@@ -540,8 +555,9 @@ async function fetchBybitHistory(interval, days) {
   let out = [];
   let end = Date.now();
   let pages = 0;
+  const maxPages = Math.ceil(target / 1000) + 2;
 
-  while (out.length < target && pages < 12) {
+  while (out.length < target && pages < maxPages) {
     const url = `${BASE}?category=linear&symbol=${SYMBOL}&interval=${interval}&end=${end}&limit=1000`;
     const r = await fetchWithRetry(url, {label:`Bybit ${interval}m`, retries:4});
     const j = await r.json();
@@ -575,7 +591,8 @@ async function fetchOkxHistoryThrottled(bar, days) {
   let after = null;
   let pages = 0;
 
-  while (out.length < target && pages < 80) {
+  const maxPages = Math.ceil(target / 100) + 2;
+  while (out.length < target && pages < maxPages) {
     let url = `https://www.okx.com/api/v5/market/history-candles?instId=SOL-USDT-SWAP&bar=${encodeURIComponent(bar)}&limit=100`;
     if (after) url += `&after=${after}`;
     const r = await fetchWithRetry(url, {label:`OKX history ${bar}`, retries:5});
