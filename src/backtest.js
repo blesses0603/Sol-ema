@@ -28,14 +28,13 @@ export async function handleBacktestRequest(req, env, ctx){
     const leverage=10;
     const strategyRaw=String(u.searchParams.get("strategy")||"swing").toLowerCase();
     const strategy=["swing","short"].includes(strategyRaw)?strategyRaw:"swing";
-    const stopRaw=String(u.searchParams.get("stop")||"D").toUpperCase();
-    const stopMode=["C","D","E"].includes(stopRaw)?stopRaw:"D";
+    const stopMode="C";
     const costRaw=Number(u.searchParams.get("costbps"));
     const costBps=[0,8,12,20].includes(costRaw)?costRaw:(strategy==="short"?12:8);
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v73_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
+      new URL(`/__backtest_v731_ha_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -77,18 +76,18 @@ const BT_CHUNK_MS = 15*24*60*60*1000;
 const BT_WARMUP_MS = 50*24*60*60*1000;
 const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 
-async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="D",requestUrl}={}){
+async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",requestUrl}={}){
   const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3-regime-router",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
+  if(!prep.complete) return {pending:true,version:"7.3.1-ha-router",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
   let results, variants;
   if(strategy==="short"){
-    const f=buildIndicators(raw.m5), m=buildIndicators(raw.m15), h=buildIndicators(raw.h1);
+    const f=buildIndicators(raw.m5), m=buildIndicators(addHeikinAshi(raw.m15)), h=buildIndicators(addHeikinAshi(raw.h1));
     variants=[
-      {id:"SL3",name:"S-Long V3",description:"Router Bull · Sweep → BOS → Retest"},
-      {id:"SS3",name:"S-Short V3",description:"Router Bear · Sweep → BOS → Retest"},
-      {id:"SCOMB3",name:"S Combined V3",description:"Regime Router 自動決定多 / 空 / 等待"}
+      {id:"SL3",name:"S-Long V3.1",description:"HA Router Bull · BOS → Retest（Sweep 加分）"},
+      {id:"SS3",name:"S-Short V3.1",description:"HA Router Bear · BOS → Retest（Sweep 加分）"},
+      {id:"SCOMB3",name:"S Combined V3.1",description:"HA Regime Router 自動決定多 / 空 / 等待"}
     ];
     results=variants.map(v=>simulateShortV73(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps,leverage:10,stopMode}));
   }else{
@@ -102,12 +101,12 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
     results=variants.map(v=>aggregateVariantRuns(v,[simulateVariantV6(a,b,c,v,mode,{tradeStartTs:coreStart,tradeEndTs:now})],10));
   }
   const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3-regime-router",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
+  return {ok:true,symbol,version:"7.3.1-ha-router",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
     sharedRules:strategy==="short"?{
-      regime:"V7.3 Router: 1H trend + ADX, 15m HH/HL or LH/LL; two consecutive 15m confirmations; Transition/Chop = no trade",
-      entry:"5m liquidity sweep → reclaim → BOS → first retest; enter next bar open",
-      stop:"C=sweep structure, D=structure+0.30ATR, E=structure+0.50ATR",
-      selectedStop:stopMode,tp1:"1R / 40%",tp2:"2R / 30%",runner:"30% / 1.5 ATR trail",
+      regime:"V7.3.1 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
+      entry:"5m real candles: BOS → first retest; liquidity sweep is optional and upgrades structure reference; enter next bar open",
+      stop:"C=5m structure / sweep extreme only",
+      selectedStop:"C",tp1:"1R / 40%",tp2:"2R / 30%",runner:"30% / 1.5 ATR trail",
       cooldown:"30m after exit",dailyLossLimit:"-3R",threeLossPause:"6h",riskPerTradePct:.5,
       sameBarConflict:"stop first (conservative)"
     }:{entry:"frozen swing engine",riskPerTradePct:.5},
@@ -136,7 +135,7 @@ async function loadHistoryRange(a,b,requestUrl,symbol="SOLUSDT"){const cache=cac
 
 function backtestPage(r){
  const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x])),ids=r.strategy==="short"?["SL3","SS3","SCOMB3"]:["C0","CL2","CS2","COMB"];
- const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"D",...e});return`/backtest?${q}`};
+ const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"C",...e});return`/backtest?${q}`};
  const btn=(a,k,lab=x=>x)=>a.map(x=>{
    const queryKey = k==='tradeMode' ? 'mode' : k==='costBps' ? 'costbps' : k==='stopMode' ? 'stop' : k;
    return `<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[queryKey]:x})}">${lab(x)}</a>`;
@@ -168,7 +167,7 @@ function backtestPage(r){
    </section>`
  }).join('');
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
- <title>${r.symbol} V7.3 Compact</title>
+ <title>${r.symbol} V7.3.1 HA Compact</title>
  <style>
  *{box-sizing:border-box}
  body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
@@ -202,7 +201,7 @@ function backtestPage(r){
  @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
  </style></head><body><main class="wrap">
  <section class="hero">
-   <div class="ey">V7.3 · ${r.symbol} · 固定10x</div>
+   <div class="ey">V7.3.1 HA · ${r.symbol} · 固定10x</div>
    <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
    <div class="sub">${r.days}天 · 成本 ${r.costBps}bps</div>
    <div class="ctl">
@@ -211,19 +210,30 @@ function backtestPage(r){
      <span>期間</span><div class="btn">${btn([7,14,30,90,180,365],'days',x=>x===365?'1年':x+'天')}</div>
      <span>方向</span><div class="btn">${btn(['both','long','short'],'tradeMode',x=>x==='both'?'多＋空':x==='long'?'只多':'只空')}</div>
      <span>成本</span><div class="btn">${btn([0,8,12,20],'costBps',x=>x+'bps')}</div>
-     ${r.strategy==='short'?`<span>止損</span><div class="btn">${btn(['C','D','E'],'stopMode',x=>x)}</div>`:''}
+     ${r.strategy==='short'?`<span>止損</span><div class="btn"><a class="on" href="#">C</a></div>`:''}
    </div>
  </section>
  <section class="note">${r.strategy==='short'
-   ?`V7.3 Regime Router：Bull 只做多、Bear 只做空、Transition / Chop 不交易；確認方向後才執行 5m Sweep → BOS → Retest。止損保留 C / D / E。每筆風險 0.5%。`
+   ?`V7.3.1 HA Router：1H/15m 平均K判斷方向；Bull 只做多、Bear 只做空、Transition / Chop 不交易；5m 使用真實K執行 BOS → Retest，Sweep 為加分條件、不再強制。止損只保留 C。每筆風險 0.5%。`
    :'波段 C 系列保持既有邏輯，不參與短線重做。'}
  </section>
  ${cards}
  </main></body></html>`
 }
-function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
+function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3.1 HA 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
 function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?symbol=SOLUSDT&days=30&mode=both&leverage=10&strategy=short">重試 30 天</a></p></body></html>`}
+
+function addHeikinAshi(rows){
+  let prevOpen=null,prevClose=null;
+  return rows.map((x,idx)=>{
+    const haClose=(x.open+x.high+x.low+x.close)/4;
+    const haOpen=idx===0?(x.open+x.close)/2:(prevOpen+prevClose)/2;
+    const haHigh=Math.max(x.high,haOpen,haClose),haLow=Math.min(x.low,haOpen,haClose);
+    prevOpen=haOpen;prevClose=haClose;
+    return {...x,realOpen:x.open,realHigh:x.high,realLow:x.low,realClose:x.close,haOpen,haHigh,haLow,haClose};
+  });
+}
 
 function simulateShortV73(f,m,h,v,mode="both",o={}){
   let mi=0,hi=0,pos=null,lastExit=0,streak=0,pause=0,day="",dayR=0,pendingL=null,pendingS=null;
@@ -234,13 +244,13 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     longSignals:0,shortSignals:0,expiredSetup:0,blockedDaily:0,blockedCooldown:0,
     blockedMargin:0,invalidStop:0,blockedWrongRegime:0
   };
-  const costBps=Number(o.costBps??12), stopMode=["C","D","E"].includes(String(o.stopMode||"D").toUpperCase())
-    ? String(o.stopMode||"D").toUpperCase() : "D";
+  const costBps=Number(o.costBps??12), stopMode="C";
 
   function classifyRegime(H,M,mi){
     if(!H||!M) return "TRANSITION";
-    const hBull=H.ema20>H.ema50&&H.close>H.ema200&&H.adx>=18;
-    const hBear=H.ema20<H.ema50&&H.close<H.ema200&&H.adx>=18;
+    const hBody=Math.abs(H.haClose-H.haOpen), hRange=Math.max(H.haHigh-H.haLow,1e-9);
+    const hBull=H.haClose>H.haOpen&&hBody/hRange>=0.35&&H.ema20>H.ema50&&H.adx>=16;
+    const hBear=H.haClose<H.haOpen&&hBody/hRange>=0.35&&H.ema20<H.ema50&&H.adx>=16;
 
     // 15m structure uses only already-closed bars. Compare two rolling 4-bar blocks
     // to distinguish HH/HL from LH/LL instead of relying only on EMA direction.
@@ -250,8 +260,9 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     const rHi=Math.max(...recent.map(x=>x.high)), pHi=Math.max(...prior.map(x=>x.high));
     const rLo=Math.min(...recent.map(x=>x.low)),  pLo=Math.min(...prior.map(x=>x.low));
 
-    const mBull=M.ema20>M.ema50&&M.close>M.ema20&&M.adx>=16&&rHi>pHi&&rLo>pLo;
-    const mBear=M.ema20<M.ema50&&M.close<M.ema20&&M.adx>=16&&rHi<pHi&&rLo<pLo;
+    const mBody=Math.abs(M.haClose-M.haOpen), mRange=Math.max(M.haHigh-M.haLow,1e-9);
+    const mBull=M.haClose>M.haOpen&&mBody/mRange>=0.25&&M.ema20>M.ema50&&rHi>pHi&&rLo>pLo;
+    const mBear=M.haClose<M.haOpen&&mBody/mRange>=0.25&&M.ema20<M.ema50&&rHi<pHi&&rLo<pLo;
 
     if(hBull&&mBull) return "BULL";
     if(hBear&&mBear) return "BEAR";
@@ -320,34 +331,37 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
 
     const bull=activeRegime==="BULL",bear=activeRegime==="BEAR";
 
-    // Liquidity sweep only in the direction permitted by the router.
+    // 5m uses REAL candles. Sweep is optional; BOS can create a setup directly.
     const prior8=f.slice(Math.max(0,i-8),i);if(prior8.length<6)continue;
     const liqLow=Math.min(...prior8.map(x=>x.low)),liqHigh=Math.max(...prior8.map(x=>x.high));
     const sweepL=bull&&b.low<liqLow&&b.close>liqLow&&b.close>b.open;
     const sweepS=bear&&b.high>liqHigh&&b.close<liqHigh&&b.close<b.open;
 
     if(sweepL){
-      const pre=f.slice(Math.max(0,i-6),i);
-      pendingL={sweepTs:b.ts,sweepIndex:i,structureLow:b.low,bosLevel:Math.max(...pre.map(x=>x.high)),bosTs:0,bosIndex:0,expires:i+12};
+      pendingL={sweepTs:b.ts,sweepIndex:i,structureLow:b.low,bosLevel:liqHigh,bosTs:0,bosIndex:0,expires:i+12,hadSweep:true};
       pendingS=null;diag.sweepLong++;
     }
     if(sweepS){
-      const pre=f.slice(Math.max(0,i-6),i);
-      pendingS={sweepTs:b.ts,sweepIndex:i,structureHigh:b.high,bosLevel:Math.min(...pre.map(x=>x.low)),bosTs:0,bosIndex:0,expires:i+12};
+      pendingS={sweepTs:b.ts,sweepIndex:i,structureHigh:b.high,bosLevel:liqLow,bosTs:0,bosIndex:0,expires:i+12,hadSweep:true};
       pendingL=null;diag.sweepShort++;
     }
 
     if(pendingL&&i>pendingL.expires){pendingL=null;diag.expiredSetup++}
     if(pendingS&&i>pendingS.expires){pendingS=null;diag.expiredSetup++}
-
-    // Cancel any setup immediately if the router no longer permits that side.
     if(!bull&&pendingL){pendingL=null;diag.blockedWrongRegime++}
     if(!bear&&pendingS){pendingS=null;diag.blockedWrongRegime++}
 
-    if(pendingL&&!pendingL.bosTs&&i>pendingL.sweepIndex&&b.close>pendingL.bosLevel&&b.rsi>=50&&b.macdHist>0){
+    // Direct BOS path when no sweep setup exists. Structure C is the recent real-candle swing extreme.
+    if(bull&&!pendingL&&b.close>liqHigh&&b.rsi>=50&&b.macdHist>0){
+      pendingL={sweepTs:0,sweepIndex:i,structureLow:liqLow,bosLevel:liqHigh,bosTs:b.ts,bosIndex:i,retestUntil:i+6,expires:i+6,hadSweep:false};
+      diag.bosLong++;
+    }else if(pendingL&&!pendingL.bosTs&&i>pendingL.sweepIndex&&b.close>pendingL.bosLevel&&b.rsi>=50&&b.macdHist>0){
       pendingL.bosTs=b.ts;pendingL.bosIndex=i;pendingL.retestUntil=i+6;diag.bosLong++;
     }
-    if(pendingS&&!pendingS.bosTs&&i>pendingS.sweepIndex&&b.close<pendingS.bosLevel&&b.rsi<=50&&b.macdHist<0){
+    if(bear&&!pendingS&&b.close<liqLow&&b.rsi<=50&&b.macdHist<0){
+      pendingS={sweepTs:0,sweepIndex:i,structureHigh:liqHigh,bosLevel:liqLow,bosTs:b.ts,bosIndex:i,retestUntil:i+6,expires:i+6,hadSweep:false};
+      diag.bosShort++;
+    }else if(pendingS&&!pendingS.bosTs&&i>pendingS.sweepIndex&&b.close<pendingS.bosLevel&&b.rsi<=50&&b.macdHist<0){
       pendingS.bosTs=b.ts;pendingS.bosIndex=i;pendingS.retestUntil=i+6;diag.bosShort++;
     }
 
@@ -366,10 +380,10 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     const entry=f[i+1].open;let stop;
     if(side==="LONG"){
       const structure=pendingL.structureLow;
-      stop=stopMode==="C"?structure:stopMode==="E"?structure-b.atr*.50:structure-b.atr*.30;
+      stop=structure;
     }else{
       const structure=pendingS.structureHigh;
-      stop=stopMode==="C"?structure:stopMode==="E"?structure+b.atr*.50:structure+b.atr*.30;
+      stop=structure;
     }
 
     if(!(entry>0&&Number.isFinite(stop))||(side==="LONG"&&stop>=entry)||(side==="SHORT"&&stop<=entry)){
