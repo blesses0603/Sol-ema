@@ -1,9 +1,10 @@
 const SYMBOL="SOLUSDT", BASE="https://api.bybit.com/v5/market/kline";
+const SHEET_WEBAPP="https://script.google.com/macros/s/AKfycbyM5J9mLarf3KUKR9kPCsgFUJL4sLxo3kHttRKIBT_QywpSp6_lQOw8rVHRmG1VUHtWFw/exec";
 const TFS=[["4h","4H","240"],["1h","1H","60"],["30m","30m","30"],["15m","15m","15"]];
 
 export default {async fetch(req){
   const u=new URL(req.url);
-  if(u.pathname==="/health") return J({ok:true,service:"SOL Technical Dashboard",time:new Date().toISOString()});
+  if(u.pathname==="/health") return J({ok:true,service:"SOL Technical Dashboard",sheetSync:"enabled",sheetWebApp:true,time:new Date().toISOString()});
   try{
     const cache = caches.default;
     const cacheKey = new Request(new URL("/__report_cache", req.url).toString(), {method:"GET"});
@@ -20,6 +21,24 @@ export default {async fetch(req){
       await cache.put(cacheKey, new Response(JSON.stringify(report), {
         headers: {"content-type":"application/json","cache-control":"public, max-age=5"}
       }));
+
+      // Sync to Google Sheet at most once per minute.
+      const syncKey = new Request(new URL("/__sheet_sync_marker", req.url).toString(), {method:"GET"});
+      const syncMarker = await cache.match(syncKey);
+      if (!syncMarker) {
+        try {
+          await fetch(SHEET_WEBAPP, {
+            method: "POST",
+            headers: {"content-type":"application/json"},
+            body: JSON.stringify(report)
+          });
+          await cache.put(syncKey, new Response("ok", {
+            headers: {"cache-control":"public, max-age=60"}
+          }));
+        } catch (e) {
+          console.log("Sheet sync failed:", e?.message || String(e));
+        }
+      }
     }
     if(u.pathname==="/api") return J(report);
     if(u.pathname!=="/") return J({error:true,message:"Not found"},404);
