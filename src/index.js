@@ -1,40 +1,102 @@
 export default {
-  async fetch(request, env, ctx) {
-    try {
-      const symbol = "SOLUSDC";
-      const intervals = ["4h", "1h", "30m", "15m"];
-      const limit = 500;
+  async fetch(request, env) {
+    const url = new URL(request.url);
 
-      const output = {};
+    // TradingView webhook
+    if (request.method === "POST" && url.pathname === "/webhook") {
+      try {
+        const data = await request.json();
 
-      for (const interval of intervals) {
-        const url =
-          `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-
-        const res = await fetch(url, {
-          headers: {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-          },
-        });
-
-        if (!res.ok) {
-          throw new Error(
-            `Binance ${interval} failed: ${res.status} ${await res.text()}`
+        if (!data || data.symbol !== "SOLUSDC") {
+          return jsonResponse(
+            { error: true, message: "Invalid payload" },
+            400
           );
         }
 
-        const klines = await res.json();
-        const closes = klines.map(k => Number(k[4]));
+        const payload = {
+          ...data,
+          receivedAt: new Date().toISOString()
+        };
 
-        const ema20 = ema(closes, 20);
-        const ema50 = ema(closes, 50);
-        const ema200 = ema(closes, 200);
-        const rsi14 = rsiWilder(closes, 14);
-        const latest = closes[closes.length - 1];
+        await env.SOL_DATA.put(
+          "latest",
+          JSON.stringify(payload)
+        );
 
-        let trend = "🟡 震盪";
-        if (ema20 > ema50 && ema50 > ema200) {
+        return jsonResponse({
+          ok: true,
+          message: "TradingView data saved",
+          receivedAt: payload.receivedAt
+        });
+
+      } catch (err) {
+        return jsonResponse(
+          {
+            error: true,
+            message: err?.message ?? String(err)
+          },
+          500
+        );
+      }
+    }
+
+    // 讀取最新資料
+    if (request.method === "GET" && url.pathname === "/latest") {
+      const saved = await env.SOL_DATA.get("latest");
+
+      if (!saved) {
+        return jsonResponse(
+          {
+            error: true,
+            message: "No TradingView data received yet"
+          },
+          404
+        );
+      }
+
+      return new Response(saved, {
+        headers: {
+          "content-type": "application/json; charset=UTF-8",
+          "access-control-allow-origin": "*",
+          "cache-control": "no-store"
+        }
+      });
+    }
+
+    // 健康檢查
+    if (request.method === "GET" && url.pathname === "/health") {
+      return jsonResponse({
+        ok: true,
+        service: "SOL TradingView Webhook",
+        time: new Date().toISOString()
+      });
+    }
+
+    return jsonResponse({
+      service: "SOL TradingView Indicator Bridge",
+      endpoints: {
+        webhook: "POST /webhook",
+        latest: "GET /latest",
+        health: "GET /health"
+      }
+    });
+  }
+};
+
+function jsonResponse(data, status = 200) {
+  return new Response(
+    JSON.stringify(data, null, 2),
+    {
+      status,
+      headers: {
+        "content-type": "application/json; charset=UTF-8",
+        "access-control-allow-origin": "*",
+        "cache-control": "no-store"
+      }
+    }
+  );
+}        if (ema20 > ema50 && ema50 > ema200) {
           trend = "🟢 多頭排列";
         } else if (ema20 < ema50 && ema50 < ema200) {
           trend = "🔴 空頭排列";
