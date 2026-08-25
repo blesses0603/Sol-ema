@@ -1,5 +1,5 @@
 const BASE="https://api.bybit.com/v5/market/kline";
-const BACKTEST_SYMBOLS=["SOLUSDT","BTCUSDT","ETHUSDT","BNBUSDT"];
+const BACKTEST_SYMBOLS=["SOLUSDT"];
 const BACKTEST_LEVERAGES=[10];
 
 function J(x,s=200){
@@ -23,26 +23,17 @@ export async function handleBacktestRequest(req, env, ctx){
     const days=Math.min(Math.max(Number(u.searchParams.get("days")||30),7),90);
     const modeRaw=String(u.searchParams.get("mode")||"both").toLowerCase();
     const mode=["both","long","short"].includes(modeRaw)?modeRaw:"both";
-    const symbolRaw=String(u.searchParams.get("symbol")||"SOLUSDT").toUpperCase();
-    const symbol=BACKTEST_SYMBOLS.includes(symbolRaw)?symbolRaw:"SOLUSDT";
+    const symbol="SOLUSDT";
     const leverage=10;
-    const strategyRaw=String(u.searchParams.get("strategy")||"swing").toLowerCase();
+    const strategyRaw="short";
     const strategy=["swing","short"].includes(strategyRaw)?strategyRaw:"swing";
     const stopMode="C";
     const costRaw=Number(u.searchParams.get("costbps"));
     const costBps=[0,8,12,20].includes(costRaw)?costRaw:(strategy==="short"?12:8);
-    const clampRsi=(key,def)=>{const raw=u.searchParams.get(key);const n=raw===null?NaN:Number(raw);return Number.isFinite(n)?Math.min(100,Math.max(0,n)):def};
-    const makeRange=(minKey,maxKey,defMin,defMax)=>{let min=clampRsi(minKey,defMin),max=clampRsi(maxKey,defMax);if(min>max)[min,max]=[max,min];return{min,max}};
-    const rsi={
-      longBos:makeRange("rsi_lbm","rsi_lbx",50,100),
-      longRetest:makeRange("rsi_lrm","rsi_lrx",48,100),
-      shortBos:makeRange("rsi_sbm","rsi_sbx",0,50),
-      shortRetest:makeRange("rsi_srm","rsi_srx",0,52)
-    };
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v737_rsi_range_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}&rsi_lbm=${rsi.longBos.min}&rsi_lbx=${rsi.longBos.max}&rsi_lrm=${rsi.longRetest.min}&rsi_lrx=${rsi.longRetest.max}&rsi_sbm=${rsi.shortBos.min}&rsi_sbx=${rsi.shortBos.max}&rsi_srm=${rsi.shortRetest.min}&rsi_srx=${rsi.shortRetest.max}`,req.url).toString(),
+      new URL(`/__backtest_v800_sol_signal_engine?days=${days}&mode=${mode}&strategy=${strategy}&costbps=${costBps}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -84,43 +75,31 @@ const BT_CHUNK_MS = 15*24*60*60*1000;
 const BT_WARMUP_MS = 50*24*60*60*1000;
 const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 
-async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",rsi={longBos:{min:50,max:100},longRetest:{min:48,max:100},shortBos:{min:0,max:50},shortRetest:{min:0,max:52}},requestUrl}={}){
-  const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
-  const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3.7-rsi-range",symbol,leverage:10,strategy,costBps,stopMode,rsi,days,tradeMode:mode,progress:prep};
-  const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
-  let results, variants;
-  if(strategy==="short"){
-    const f=buildIndicators(raw.m5), m=buildIndicators(addHeikinAshi(raw.m15)), h=buildIndicators(addHeikinAshi(raw.h1));
-    variants=[
-      {id:"SL3",name:"S-Long V3.1",description:"HA Router Bull · BOS → Retest（Sweep 加分）"},
-      {id:"SS3",name:"S-Short V3.1",description:"HA Router Bear · BOS → Retest（Sweep 加分）"},
-      {id:"SCOMB3",name:"S Combined V3.1",description:"HA Regime Router 自動決定多 / 空 / 等待"}
-    ];
-    results=variants.map(v=>simulateShortV73(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps,leverage:10,stopMode,rsi}));
-  }else{
-    variants=[
-      {id:"C0",name:"C Original",description:"既有波段基準"},
-      {id:"CL2",name:"C-Long V2",description:"既有 4H/1H/15m 多頭"},
-      {id:"CS2",name:"C-Short V2",description:"既有 4H/1H/15m 空頭"},
-      {id:"COMB",name:"C Combined",description:"既有波段多空組合"}
-    ];
-    const a=buildIndicators(raw.m15),b=buildIndicators(raw.h1),c=buildIndicators(raw.h4);
-    results=variants.map(v=>aggregateVariantRuns(v,[simulateVariantV6(a,b,c,v,mode,{tradeStartTs:coreStart,tradeEndTs:now})],10));
-  }
+async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="short",costBps=12,stopMode="C",requestUrl}={}){
+  const now=Date.now(),coreStart=now-days*86400e3,dataStart=coreStart-BT_WARMUP_MS;
+  const prep=await ensureHistoryBundles(dataStart,now,requestUrl,"SOLUSDT");
+  if(!prep.complete)return{pending:true,version:"8.0.0-sol-signal-engine",symbol:"SOLUSDT",leverage:10,strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,progress:prep};
+  const raw=await loadHistoryRange(dataStart,now,requestUrl,"SOLUSDT");
+  const f=buildIndicators(raw.m5),m=buildIndicators(raw.m15);
+  const variants=[
+    {id:"V8L",name:"V8 Long",description:"15m bias · 5m multi-trigger"},
+    {id:"V8S",name:"V8 Short",description:"15m bias · 5m multi-trigger"},
+    {id:"V8C",name:"V8 Combined",description:"SOL 5m 多訊號引擎"}
+  ];
+  let results=variants.map(v=>simulateV8Sol(f,m,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps}));
   results=results.map(applyPositionSizing);
-  const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3.7-rsi-range",strategy,costBps,stopMode,rsi,days,tradeMode:mode,leverage:10,
-    positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U保證金；上一單盈利：下一單使用當前本金5%作保證金"},
-    sharedRules:strategy==="short"?{
-      regime:"V7.3.2 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
-      entry:"5m real candles: BOS → first retest; liquidity sweep is optional and upgrades structure reference; enter next bar open",
-      stop:"C=5m structure / sweep extreme only",
-      selectedStop:"C",tp1:"1R / 40%",tp2:"2R / 30%",runner:"30% / 1.5 ATR trail",
-      cooldown:"30m after exit",dailyLossLimit:"-3R",threeLossPause:"6h",riskPerTradePct:.5,
-      sameBarConflict:"stop first (conservative)"
-    }:{entry:"frozen swing engine",riskPerTradePct:.5},
-    leaderboard:{bestByNetR:[...results].sort((a,b)=>b.netR-a.netR)[0]?.variant||null,bestByProfitFactor:[...eligible].sort((a,b)=>b.profitFactor-a.profitFactor)[0]?.variant||null,lowestDrawdown:[...results].filter(x=>x.trades>0).sort((a,b)=>a.maxDrawdownPct-b.maxDrawdownPct)[0]?.variant||null},results};
+  return{
+    ok:true,symbol:"SOLUSDT",version:"8.0.0-sol-signal-engine",strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,leverage:10,
+    positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U；上一單盈利：下一單使用當前本金5%"},
+    sharedRules:{
+      bias:"15m EMA20/50 + EMA20 slope defines directional bias; neutral allows both sides only with stronger trigger score",
+      entry:"5m multi-trigger score: pullback, momentum, BOS, EMA reclaim/reject, sweep; score >= 2 enters",
+      frequencyGoal:"KPI: 每個交易日自然產生 10+ 訊號；不強制湊單",
+      stop:"5m ATR/structure hybrid",tp1:"0.8R / 50%",tp2:"1.5R / 30%",runner:"20% / 1.2 ATR trail",
+      cooldown:"同方向 15 分鐘；出場後不設 30 分鐘全域冷卻"
+    },
+    results
+  };
 }
 function compactPeriodResult(r){return {trades:r.trades,winRate:r.winRate,profitFactor:r.profitFactor,netR:r.netR,endingEquity:r.endingEquity,maxDrawdownPct:r.maxDrawdownPct,long:r.long,short:r.short};}
 function aggregateVariantRuns(v,runs,leverage=5){const all=runs.flatMap(r=>r.__trades||[]).sort((a,b)=>a.entryTs-b.entryTs),diag={};for(const r of runs)for(const[k,val]of Object.entries(r.diagnostics||{}))diag[k]=(diag[k]||0)+(Number(val)||0);return {variant:v.id,name:v.name,description:v.description,...summarizeTradeSequence(all,leverage),diagnostics:diag,periods:runs.map((r,i)=>({index:i+1,trades:r.trades,winRate:r.winRate,profitFactor:r.profitFactor,netR:r.netR,maxDrawdownPct:r.maxDrawdownPct,long:r.long,short:r.short})),recentTrades:all.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:t.entry,exit:t.exitPrice,r:t.r,risk:t.risk,forcedClose:!!t.forcedClose})),__trades:all};}
@@ -163,156 +142,33 @@ async function fetchBybitRange(interval,startTs,endTs,symbol="SOLUSDT"){let out=
 async function loadHistoryRange(a,b,requestUrl,symbol="SOLUSDT"){const cache=caches.default,ids=chunkIdsForRange(a,b),m5=[],m15=[],h1=[],h4=[];for(const id of ids){const h=await cache.match(historyChunkKey(id,requestUrl,symbol));if(!h)throw new Error(`歷史快取缺少 chunk ${id}，請重新整理。`);const x=await h.json();m5.push(...(x.m5||[]));m15.push(...(x.m15||[]));h1.push(...(x.h1||[]));h4.push(...(x.h4||[]))}const clean=xs=>[...new Map(xs.filter(x=>x.ts>=a&&x.ts<=b).map(x=>[x.ts,x])).values()].sort((p,q)=>p.ts-q.ts);return{m5:clean(m5),m15:clean(m15),h1:clean(h1),h4:clean(h4)};}
 
 function backtestPage(r){
- const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x])),ids=r.strategy==="short"?["SL3","SS3","SCOMB3"]:["C0","CL2","CS2","COMB"];
- const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"C",rsi_lbm:r.rsi?.longBos?.min??50,rsi_lbx:r.rsi?.longBos?.max??100,rsi_lrm:r.rsi?.longRetest?.min??48,rsi_lrx:r.rsi?.longRetest?.max??100,rsi_sbm:r.rsi?.shortBos?.min??0,rsi_sbx:r.rsi?.shortBos?.max??50,rsi_srm:r.rsi?.shortRetest?.min??0,rsi_srx:r.rsi?.shortRetest?.max??52,...e});return`/backtest?${q}`};
- const btn=(a,k,lab=x=>x)=>a.map(x=>{
-   const queryKey = k==='tradeMode' ? 'mode' : k==='costBps' ? 'costbps' : k==='stopMode' ? 'stop' : k;
-   return `<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[queryKey]:x})}">${lab(x)}</a>`;
- }).join('');
- const fmtTs=ts=>{
-   if(!Number.isFinite(Number(ts)))return "-";
-   try{return new Date(Number(ts)).toLocaleString("zh-TW",{timeZone:"Asia/Taipei",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false});}
-   catch{return "-";}
- };
- const num=(v,d=3)=>Number.isFinite(Number(v))?Number(v).toFixed(d):"-";
- const cards=ids.map(id=>{
-   const x=by[id]||{},l=x.leverage||{},d=x.diagnostics||{};
-   const tradeRows=(x.__trades||x.recentTrades||[]).map((t,i)=>{
-     const rVal=Number(t.r)||0,pnl=Number(t.pnlU)||0;
-     const result=rVal>0.02?"盈利":rVal<-.02?"虧損":"打平";
-     const resultClass=rVal>0.02?"p":rVal<-.02?"n":"";
-     const stop=t.initialStop??t.stop;
-     const ed=t.entryDiag||{};
-     const haClass=v=>v==="Bull"?"p":v==="Bear"?"n":"";
-     const emaText=Number.isFinite(Number(ed.ema20))&&Number.isFinite(Number(ed.ema50))?`${num(ed.ema20,2)} / ${num(ed.ema50,2)}`:"-";
-     const retestText=ed.retest===true?"✓":ed.retest===false?"✗":"-";
-     const sweepText=ed.hadSweep===true?"✓":ed.hadSweep===false?"✗":"-";
-     return `<tr>
-       <td>${i+1}</td>
-       <td>${fmtTs(t.entryTs)}</td>
-       <td class="${t.side==="LONG"?"p":"n"}">${t.side==="LONG"?"多":"空"}</td>
-       <td>${num(t.entry,4)}</td>
-       <td>${num(stop,4)}</td>
-       <td>${num(t.exitPrice??t.exit,4)}</td>
-       <td class="${resultClass}">${rVal>=0?"+":""}${num(rVal,2)}R</td>
-       <td class="${pnl>=0?"p":"n"}">${pnl>=0?"+":""}${num(pnl,3)}U</td>
-       <td class="${resultClass}">${result}${t.forcedClose?"*":""}</td>
-       <td class="${haClass(ed.ha1h)}">${ed.ha1h||"-"}</td>
-       <td class="${haClass(ed.ha15m)}">${ed.ha15m||"-"}</td>
-       <td>${emaText}</td>
-       <td>${num(ed.adx,1)}</td>
-       <td>${num(ed.rsi,1)}</td>
-       <td>${num(ed.macdHist,4)}</td>
-       <td>${num(ed.bosLevel,4)}</td>
-       <td>${retestText}</td>
-       <td>${sweepText}</td>
-     </tr>`;
-   }).join('');
-   const tradeTable=tradeRows?`<div class="tradebox">
-     <div class="tradehead">逐筆交易 <small>時間為台灣時間；* = 回測期末強制平倉</small></div>
-     <div class="scroll"><table>
-       <thead><tr><th>#</th><th>時間</th><th>方向</th><th>Entry</th><th>Stop</th><th>Exit</th><th>R</th><th>PnL</th><th>結果</th><th>1H HA</th><th>15m HA</th><th>EMA20/50</th><th>ADX</th><th>RSI</th><th>MACD</th><th>BOS Level</th><th>Retest</th><th>Sweep</th></tr></thead>
-       <tbody>${tradeRows}</tbody>
-     </table></div>
-   </div>`:`<div class="empty">此策略區間沒有交易。</div>`;
-   const diagnostics=r.strategy==='short'?`<details><summary>🔬 訊號診斷</summary>
-     <div class="diag">
-       <span>Sweep多<b>${d.sweepLong||0}</b></span><span>BOS多<b>${d.bosLong||0}</b></span>
-       <span>Retest多<b>${d.retestLong||0}</b></span><span>進場多<b>${d.longSignals||0}</b></span>
-       <span>Sweep空<b>${d.sweepShort||0}</b></span><span>BOS空<b>${d.bosShort||0}</b></span>
-       <span>Retest空<b>${d.retestShort||0}</b></span><span>進場空<b>${d.shortSignals||0}</b></span>
-       <span>過期<b>${d.expiredSetup||0}</b></span><span>Chop<b>${d.chop||0}</b></span>
-       <span>Transition<b>${d.transition||0}</b></span><span>切換<b>${d.regimeSwitches||0}</b></span>
-       <span>日損擋<b>${d.blockedDaily||0}</b></span><span>冷卻擋<b>${d.blockedCooldown||0}</b></span>
-     </div>${tradeTable}
-   </details>`:'';
-   return`<section class="card">
-     <div class="ctop"><div><h2>${x.name||id}</h2><p>${x.description||''}</p></div><b class="net ${x.netR>=0?'p':'n'}">${x.netR>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</b></div>
-     <div class="g">
-       <div><small>交易</small><b>${x.trades||0}</b></div>
-       <div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div>
-       <div><small>PF</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div>
-       <div><small>回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div>
-       <div><small>連敗</small><b>${x.maxLossStreak||0}</b></div>
-       <div><small>100U→</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div>
-       <div><small>🟢 多</small><b>${x.long?.trades||0} / ${Number(x.long?.netR||0).toFixed(2)}R</b></div>
-       <div><small>🔴 空</small><b>${x.short?.trades||0} / ${Number(x.short?.netR||0).toFixed(2)}R</b></div>
-       <div><small>平均保證金</small><b>${Number(x.positionSizing?.avgMarginU||0).toFixed(2)}U</b></div>
-       <div><small>最高保證金</small><b>${Number(x.positionSizing?.maxMarginU||0).toFixed(2)}U</b></div>
-     </div>${diagnostics}
-   </section>`
- }).join('');
- return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
- <title>${r.symbol} V7.3.7 RSI Range</title>
- <style>
- *{box-sizing:border-box}
- body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
- .wrap{max-width:760px;margin:auto}
- .hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:13px}
- .hero{padding:10px 11px;margin:0 0 6px}
- .ey{color:#91a0b5;font-size:10px;line-height:1.2}
- h1{font-size:20px;line-height:1.1;margin:5px 0 3px}
- .sub{color:#91a0b5;font-size:11px;margin:0 0 6px}
- .ctl{display:grid;grid-template-columns:42px 1fr;align-items:start;gap:3px 6px;margin-top:2px}
- .ctl>span{font-size:10px;color:#a7b3c6;font-weight:700;line-height:26px}
- .btn{display:flex;gap:4px;flex-wrap:wrap;margin:1px 0}
- .btn a{color:#e9edf4;text-decoration:none;border:1px solid #34435c;border-radius:7px;padding:4px 7px;font-size:11px;line-height:1.1;min-height:26px;display:flex;align-items:center}
- .btn a.on{background:#f4f6f8;color:#111827;border-color:#f4f6f8}
- .note{padding:8px 10px;margin:0 0 6px;color:#a7b3c6;font-size:10px;line-height:1.45}
- .card{padding:10px;margin:0 0 6px}
- .ctop{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
- .card h2{font-size:16px;line-height:1.1;margin:0 0 2px}
- .card p{color:#91a0b5;font-size:10px;line-height:1.25;margin:0}
- .net{font-size:19px;white-space:nowrap;line-height:1}
- .p{color:#58d99b!important}.n{color:#ff7e87!important}
- .g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:7px}
- .g div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px 7px;min-height:43px}
- .g small{display:block;color:#8190a6;font-size:9px;line-height:1.1;margin-bottom:2px}
- .g b{display:block;color:#fff;font-size:12px;line-height:1.15;overflow-wrap:anywhere}
- details{margin-top:6px}
- summary{cursor:pointer;color:#cbd5e1;font-size:10px}
- .diag{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;margin-top:5px}
- .diag span{background:#0b1420;border:1px solid #202d42;border-radius:7px;padding:5px;color:#8190a6;font-size:9px}
- .diag b{display:block;color:#fff;font-size:11px;margin-top:1px}
- .tradebox{margin-top:7px;border-top:1px solid #263348;padding-top:7px}
- .tradehead{font-size:10px;font-weight:700;color:#d7deea;margin-bottom:5px}
- .tradehead small{font-weight:400;color:#8190a6;margin-left:4px}
- .scroll{overflow:auto;max-height:360px;border:1px solid #202d42;border-radius:8px;background:#0b1420}
- table{border-collapse:collapse;width:100%;min-width:1320px;font-size:9px}
- th,td{padding:6px 7px;text-align:right;border-bottom:1px solid #1e2a3d;white-space:nowrap}
- th{position:sticky;top:0;background:#101b29;color:#8190a6;font-weight:700;z-index:1}
- th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){text-align:left}
- tbody tr:last-child td{border-bottom:0}
- .empty{margin-top:6px;color:#8190a6;font-size:9px}
- @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
- </style></head><body><main class="wrap">
- <section class="hero">
-   <div class="ey">V7.3.7 RSI RANGE · ${r.symbol} · 固定10x</div>
-   <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
-   <div class="sub">${r.days}天 · 100U本金 · 5U保證金 · 10x · 成本 ${r.costBps}bps</div>
-   <div class="ctl">
-     <span>模式</span><div class="btn">${btn(['swing','short'],'strategy',x=>x==='swing'?'🧭波段':'⚡短線')}</div>
-     <span>幣種</span><div class="btn">${btn(BACKTEST_SYMBOLS,'symbol',x=>x.replace('USDT',''))}</div>
-     <span>期間</span><div class="btn">${btn([7,14,30,90],'days',x=>x+'天')}</div>
-     <span>方向</span><div class="btn">${btn(['both','long','short'],'tradeMode',x=>x==='both'?'多＋空':x==='long'?'只多':'只空')}</div>
-     <span>成本</span><div class="btn">${btn([0,8,12,20],'costBps',x=>x+'bps')}</div>
-     ${r.strategy==='short'?`<span>止損</span><div class="btn"><a class="on" href="#">C</a></div>
-     <span>RSI</span><form class="rsiForm" method="get" action="/backtest">
-       <input type="hidden" name="symbol" value="${r.symbol}"><input type="hidden" name="days" value="${r.days}"><input type="hidden" name="mode" value="${r.tradeMode}"><input type="hidden" name="strategy" value="${r.strategy}"><input type="hidden" name="costbps" value="${r.costBps}">
-       <label>多BOS <input name="rsi_lbm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longBos?.min??50}"> ～ <input name="rsi_lbx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longBos?.max??100}"></label>
-       <label>多Retest <input name="rsi_lrm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longRetest?.min??48}"> ～ <input name="rsi_lrx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longRetest?.max??100}"></label>
-       <label>空BOS <input name="rsi_sbm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortBos?.min??0}"> ～ <input name="rsi_sbx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortBos?.max??50}"></label>
-       <label>空Retest <input name="rsi_srm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortRetest?.min??0}"> ～ <input name="rsi_srx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortRetest?.max??52}"></label>
-       <button type="submit">套用 RSI 區間</button>
-     </form>`:''}
-   </div>
- </section>
- <section class="note">${r.strategy==='short'
-   ?`V7.3.7 將 RSI 改為 BOS / Retest 各自可設定 Min～Max 區間；其他 HA Router 與進出場邏輯保持不變。1H/15m 平均K判斷方向，5m 真實K執行 BOS → Retest，止損 C。第一單/上一單非盈利用5U保證金；上一單盈利則下一單用當前本金5%保證金。`
-   :'波段 C 系列保持既有邏輯，不參與短線重做。'}
- </section>
- ${cards}
- </main></body></html>`
+ const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x]));
+ const keep=e=>{const q=new URLSearchParams({days:r.days,mode:r.tradeMode,strategy:"short",costbps:r.costBps,...e});return`/backtest?${q}`};
+ const btn=(a,k,lab=x=>x)=>a.map(x=>`<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[k==="tradeMode"?"mode":k==="costBps"?"costbps":k]:x})}">${lab(x)}</a>`).join('');
+ const cards=["V8L","V8S","V8C"].map(id=>{
+   const x=by[id]||{},f=x.signalFrequency||{},ps=x.positionSizing||{};
+   return`<section class="card"><div class="top"><div><h2>${x.name||id}</h2><p>${x.description||""}</p></div><b class="${x.netR>=0?"p":"n"}">${x.netR>=0?"+":""}${Number(x.netR||0).toFixed(2)}R</b></div>
+   <div class="kpi">
+    <div><small>訊號/日</small><strong>${Number(f.avgPerDay||0).toFixed(1)}</strong></div>
+    <div><small>10+達標天</small><strong class="${f.daysBelow10===0?"p":""}">${f.days10Plus||0}/${f.days||0}</strong></div>
+    <div><small>最低/日</small><strong>${f.minPerDay??0}</strong></div>
+    <div><small>最高/日</small><strong>${f.maxPerDay??0}</strong></div>
+    <div><small>成交</small><strong>${x.trades||0}</strong></div>
+    <div><small>勝率</small><strong>${Number(x.winRate||0).toFixed(1)}%</strong></div>
+    <div><small>PF</small><strong>${Number(x.profitFactor||0).toFixed(2)}</strong></div>
+    <div><small>回撤</small><strong>${Number(x.maxDrawdownPct||0).toFixed(2)}%</strong></div>
+    <div><small>100U→</small><strong>${Number(x.endingEquity||100).toFixed(2)}U</strong></div>
+    <div><small>平均保證金</small><strong>${Number(ps.avgMarginU||0).toFixed(2)}U</strong></div>
+   </div></section>`
+ }).join("");
+ return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+ <title>SOL V8 Signal Engine</title><style>
+ *{box-sizing:border-box}body{margin:0;padding:7px;background:#0b0f17;color:#f5f7fb;font-family:system-ui}.wrap{max-width:760px;margin:auto}.hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:13px;padding:10px;margin-bottom:7px}.ey,small,p{color:#91a0b5}.ey{font-size:10px}h1{font-size:20px;margin:4px 0}h2{font-size:15px;margin:0}p{font-size:10px;margin:2px 0}.row{display:grid;grid-template-columns:42px 1fr;gap:5px;align-items:center;margin-top:5px}.row>span{font-size:10px}.btn{display:flex;gap:4px;flex-wrap:wrap}.btn a{font-size:11px;color:#fff;text-decoration:none;border:1px solid #34435c;border-radius:7px;padding:5px 8px}.btn a.on{background:#f4f6f8;color:#111}.top{display:flex;justify-content:space-between;gap:8px}.top>b{font-size:19px}.p{color:#58d99b!important}.n{color:#ff7e87!important}.kpi{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:8px}.kpi div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px}.kpi small{display:block;font-size:9px}.kpi strong{font-size:12px}@media(min-width:520px){.kpi{grid-template-columns:repeat(5,1fr)}}
+ </style></head><body><main class="wrap"><section class="hero"><div class="ey">V8.0 SOL ONLY · 5m SIGNAL ENGINE · 10x</div><h1>⚡ SOL 多訊號短線引擎</h1><p>${r.days}天 · 100U · 基礎保證金5U · 成本${r.costBps}bps</p>
+ <div class="row"><span>期間</span><div class="btn">${btn([7,14,30,90],"days",x=>x+"天")}</div></div>
+ <div class="row"><span>方向</span><div class="btn">${btn(["both","long","short"],"tradeMode",x=>x==="both"?"多＋空":x==="long"?"只多":"只空")}</div></div>
+ <div class="row"><span>成本</span><div class="btn">${btn([0,8,12,20],"costBps",x=>x+"bps")}</div></div></section>
+ <section class="note"><b>目標：</b>每個交易日自然產生 10+ 個交易訊號，不強制湊單。15m 只負責方向偏置；5m 可由 Pullback / Momentum / BOS / EMA reclaim-reject / Sweep 多種觸發形成訊號。</section>${cards}</main></body></html>`
 }
 function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3.2 HA 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
@@ -327,6 +183,113 @@ function addHeikinAshi(rows){
     prevOpen=haOpen;prevClose=haClose;
     return {...x,realOpen:x.open,realHigh:x.high,realLow:x.low,realClose:x.close,haOpen,haHigh,haLow,haClose};
   });
+}
+
+function simulateV8Sol(f,m,v,mode="both",o={}){
+  let mi=0,pos=null,lastLongSignal=0,lastShortSignal=0;
+  const trades=[],signals=[],costBps=Number(o.costBps??12);
+  const diag={pullbackLong:0,pullbackShort:0,momentumLong:0,momentumShort:0,bosLong:0,bosShort:0,reclaimLong:0,rejectShort:0,sweepLong:0,sweepShort:0,longSignals:0,shortSignals:0};
+
+  const pushSignal=(side,b,score,triggers,bias)=>{
+    signals.push({ts:b.ts,side,score,triggers:[...triggers],bias});
+    if(side==="LONG")diag.longSignals++;else diag.shortSignals++;
+  };
+
+  for(let i=60;i<f.length-1;i++){
+    const b=f[i],p=f[i-1];
+    while(mi+1<m.length&&m[mi+1].ts<=b.ts)mi++;
+    const M=m[mi];
+    if(!M||![b.atr,b.rsi,b.macdHist,b.ema20,b.ema50,M.ema20,M.ema50].every(Number.isFinite))continue;
+    if(b.ts<o.tradeStartTs)continue;if(b.ts>o.tradeEndTs)break;
+
+    if(pos){
+      const z=manageV8Position(pos,b);
+      if(z.done){
+        const feeR=(costBps/10000)/(pos.risk/pos.entry);
+        trades.push({...pos,exitTs:b.ts,exitPrice:z.p,r:+(z.r-feeR).toFixed(3)});
+        pos=null;
+      }
+      continue;
+    }
+
+    const slope20=M.ema20-(m[Math.max(0,mi-2)]?.ema20??M.ema20);
+    const bullBias=M.ema20>M.ema50&&slope20>0;
+    const bearBias=M.ema20<M.ema50&&slope20<0;
+    const bias=bullBias?"BULL":bearBias?"BEAR":"NEUTRAL";
+
+    const prior=f.slice(Math.max(0,i-8),i);
+    if(prior.length<6)continue;
+    const hi=Math.max(...prior.map(x=>x.high)),lo=Math.min(...prior.map(x=>x.low));
+    const atr=Math.max(b.atr,1e-9);
+
+    const longT=[],shortT=[];
+    if(b.low<=b.ema20+.15*atr&&b.close>b.ema20&&b.close>b.open){longT.push("PULLBACK");diag.pullbackLong++}
+    if(b.high>=b.ema20-.15*atr&&b.close<b.ema20&&b.close<b.open){shortT.push("PULLBACK");diag.pullbackShort++}
+    if(b.macdHist>0&&b.macdHist>p.macdHist&&b.close>p.high){longT.push("MOMENTUM");diag.momentumLong++}
+    if(b.macdHist<0&&b.macdHist<p.macdHist&&b.close<p.low){shortT.push("MOMENTUM");diag.momentumShort++}
+    if(b.close>hi+.03*atr){longT.push("BOS");diag.bosLong++}
+    if(b.close<lo-.03*atr){shortT.push("BOS");diag.bosShort++}
+    if(p.close<=p.ema20&&b.close>b.ema20&&b.close>b.open){longT.push("EMA_RECLAIM");diag.reclaimLong++}
+    if(p.close>=p.ema20&&b.close<b.ema20&&b.close<b.open){shortT.push("EMA_REJECT");diag.rejectShort++}
+    if(b.low<lo&&b.close>lo&&b.close>b.open){longT.push("SWEEP");diag.sweepLong++}
+    if(b.high>hi&&b.close<hi&&b.close<b.open){shortT.push("SWEEP");diag.sweepShort++}
+
+    let lScore=longT.length+(bullBias?1:0),sScore=shortT.length+(bearBias?1:0);
+    if(bearBias)lScore-=1;if(bullBias)sScore-=1;
+
+    let L=mode!=="short"&&v.id!=="V8S"&&lScore>=2;
+    let S=mode!=="long"&&v.id!=="V8L"&&sScore>=2;
+    if(L&&S){if(lScore>sScore)S=false;else if(sScore>lScore)L=false;else{L=false;S=false}}
+
+    if(L&&b.ts-lastLongSignal>=15*60e3){
+      pushSignal("LONG",b,lScore,longT,bias);lastLongSignal=b.ts;
+      const entry=f[i+1].open;
+      const structure=Math.min(...f.slice(Math.max(0,i-5),i+1).map(x=>x.low));
+      let stop=Math.min(entry-.65*atr,structure);
+      let risk=entry-stop;
+      if(risk>0&&risk/entry<.04){
+        pos=makeV8Position("LONG",entry,risk,stop,f[i+1].ts,{score:lScore,triggers:longT,bias,rsi:b.rsi,macdHist:b.macdHist});
+      }
+    }else if(S&&b.ts-lastShortSignal>=15*60e3){
+      pushSignal("SHORT",b,sScore,shortT,bias);lastShortSignal=b.ts;
+      const entry=f[i+1].open;
+      const structure=Math.max(...f.slice(Math.max(0,i-5),i+1).map(x=>x.high));
+      let stop=Math.max(entry+.65*atr,structure);
+      let risk=stop-entry;
+      if(risk>0&&risk/entry<.04){
+        pos=makeV8Position("SHORT",entry,risk,stop,f[i+1].ts,{score:sScore,triggers:shortT,bias,rsi:b.rsi,macdHist:b.macdHist});
+      }
+    }
+  }
+
+  if(pos&&f.length){
+    const q=[...f].reverse().find(x=>x.ts<=o.tradeEndTs)||f.at(-1),d=pos.side==="LONG"?1:-1;
+    const rr=pos.real+pos.rem*((q.close-pos.entry)*d/pos.risk)-(costBps/10000)/(pos.risk/pos.entry);
+    trades.push({...pos,exitTs:q.ts,exitPrice:q.close,r:+rr.toFixed(3),forcedClose:true});
+  }
+
+  const freq=summarizeSignalFrequency(signals,o.tradeStartTs,o.tradeEndTs);
+  return{variant:v.id,name:v.name,description:v.description,...summarizeTradeSequence(trades,10),diagnostics:diag,signalFrequency:freq,recentTrades:trades.slice(-10),__trades:trades,__signals:signals};
+}
+
+function makeV8Position(side,entry,risk,stop,entryTs,entryDiag){
+  const d=side==="LONG"?1:-1;
+  return{side,entry,entryTs,risk,stop,initialStop:stop,tp1:entry+d*risk*.8,tp2:entry+d*risk*1.5,rem:1,real:0,tp1Hit:false,tp2Hit:false,trail:null,entryDiag};
+}
+function manageV8Position(p,x){
+  const L=p.side==="LONG";
+  if(L?x.low<=p.stop:x.high>=p.stop)return{done:true,r:p.real+p.rem*(p.stop===p.entry?0:-1),p:p.stop};
+  if(!p.tp1Hit&&(L?x.high>=p.tp1:x.low<=p.tp1)){p.tp1Hit=true;p.real+=.40;p.rem-=.50;p.stop=p.entry}
+  if(!p.tp2Hit&&(L?x.high>=p.tp2:x.low<=p.tp2)){p.tp2Hit=true;p.real+=.45;p.rem-=.30;p.trail=L?x.close-1.2*x.atr:x.close+1.2*x.atr}
+  if(p.tp2Hit){const n=L?x.close-1.2*x.atr:x.close+1.2*x.atr;p.trail=p.trail==null?n:(L?Math.max(p.trail,n):Math.min(p.trail,n));if(L?x.low<=p.trail:x.high>=p.trail){const rr=L?(p.trail-p.entry)/p.risk:(p.entry-p.trail)/p.risk;return{done:true,r:p.real+p.rem*rr,p:p.trail}}}
+  return{done:false};
+}
+function summarizeSignalFrequency(signals,start,end){
+  const days={};
+  for(let t=new Date(start);t.getTime()<=end;t=new Date(t.getTime()+86400e3))days[t.toISOString().slice(0,10)]=0;
+  for(const x of signals){const k=new Date(x.ts).toISOString().slice(0,10);if(k in days)days[k]++}
+  const vals=Object.values(days),sorted=[...vals].sort((a,b)=>a-b),n=vals.length||1;
+  return{total:signals.length,days:vals.length,avgPerDay:+(signals.length/n).toFixed(2),medianPerDay:sorted.length?sorted[Math.floor(sorted.length/2)]:0,minPerDay:sorted.length?sorted[0]:0,maxPerDay:sorted.length?sorted.at(-1):0,days10Plus:vals.filter(x=>x>=10).length,daysBelow10:vals.filter(x=>x<10).length,hitRatePct:+(vals.filter(x=>x>=10).length/n*100).toFixed(1)};
 }
 
 function simulateShortV73(f,m,h,v,mode="both",o={}){
