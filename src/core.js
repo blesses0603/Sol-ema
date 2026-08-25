@@ -367,7 +367,10 @@ async function loadHistoryRange(a,b,requestUrl,symbol="SOLUSDT"){const cache=cac
 function backtestPage(r){
  const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x])),ids=r.strategy==="short"?["SL3","SS3","SCOMB3"]:["C0","CL2","CS2","COMB"];
  const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"D",...e});return`/backtest?${q}`};
- const btn=(a,k,lab=x=>x)=>a.map(x=>`<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[k==='tradeMode'?'mode':k]:x})}">${lab(x)}</a>`).join('');
+ const btn=(a,k,lab=x=>x)=>a.map(x=>{
+   const queryKey = k==='tradeMode' ? 'mode' : k==='costBps' ? 'costbps' : k==='stopMode' ? 'stop' : k;
+   return `<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[queryKey]:x})}">${lab(x)}</a>`;
+ }).join('');
  const cards=ids.map(id=>{
    const x=by[id]||{},l=x.leverage||{},d=x.diagnostics||{};
    const diagnostics=r.strategy==='short'?`<details><summary>🔬 訊號診斷</summary><div class="diag">
