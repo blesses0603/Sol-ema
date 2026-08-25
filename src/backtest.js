@@ -45,7 +45,7 @@ export async function handleBacktestRequest(req, env, ctx){
       return new Response(backtestPage(output),{headers:{"content-type":"text/html; charset=UTF-8","cache-control":"no-store"}});
     }
 
-    const result=await runBacktestStaged({days,mode,symbol,leverage,strategy,costBps,stopMode,rsi,requestUrl:req.url});
+    const result=await runBacktestStaged({days,mode,symbol,leverage,strategy,costBps,stopMode,requestUrl:req.url});
 
     if(result.pending){
       if(u.pathname==="/backtest/api")return J(result,202);
@@ -301,7 +301,7 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     longSignals:0,shortSignals:0,expiredSetup:0,blockedDaily:0,blockedCooldown:0,
     blockedMargin:0,invalidStop:0,blockedWrongRegime:0
   };
-  const costBps=Number(o.costBps??12), stopMode="C", rsi=o.rsi||{longBos:50,longRetest:48,shortBos:50,shortRetest:52};
+  const costBps=Number(o.costBps??12), stopMode="C", rsi=o.rsi||{longBos:{min:50,max:100},longRetest:{min:48,max:100},shortBos:{min:0,max:50},shortRetest:{min:0,max:52}};
 
   function classifyRegime(H,M,mi){
     if(!H||!M) return "TRANSITION";
