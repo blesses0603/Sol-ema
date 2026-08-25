@@ -222,7 +222,7 @@ async function calc(label, interval) {
   const e20 = ema(closes,20);
   const e50 = ema(closes,50);
   const e200 = ema(closes,200);
-  const r14 = rsi(closes,14);
+  const r14 = rsiW(closes,14);
   const close = closes[closes.length-1];
 
   let score = 0;
