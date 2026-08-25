@@ -20,7 +20,7 @@ export async function handleBacktestRequest(req, env, ctx){
   }
 
   try{
-    const days=Math.min(Math.max(Number(u.searchParams.get("days")||30),7),365);
+    const days=Math.min(Math.max(Number(u.searchParams.get("days")||30),7),90);
     const modeRaw=String(u.searchParams.get("mode")||"both").toLowerCase();
     const mode=["both","long","short"].includes(modeRaw)?modeRaw:"both";
     const symbolRaw=String(u.searchParams.get("symbol")||"SOLUSDT").toUpperCase();
@@ -34,7 +34,7 @@ export async function handleBacktestRequest(req, env, ctx){
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v731_ha_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
+      new URL(`/__backtest_v732_sizing_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -79,7 +79,7 @@ const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",requestUrl}={}){
   const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3.1-ha-router",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
+  if(!prep.complete) return {pending:true,version:"7.3.2-ha-sizing",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
   let results, variants;
   if(strategy==="short"){
@@ -100,10 +100,12 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
     const a=buildIndicators(raw.m15),b=buildIndicators(raw.h1),c=buildIndicators(raw.h4);
     results=variants.map(v=>aggregateVariantRuns(v,[simulateVariantV6(a,b,c,v,mode,{tradeStartTs:coreStart,tradeEndTs:now})],10));
   }
+  results=results.map(applyPositionSizing);
   const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3.1-ha-router",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
+  return {ok:true,symbol,version:"7.3.2-ha-sizing",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
+    positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U保證金；上一單盈利：下一單使用當前本金5%作保證金"},
     sharedRules:strategy==="short"?{
-      regime:"V7.3.1 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
+      regime:"V7.3.2 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
       entry:"5m real candles: BOS → first retest; liquidity sweep is optional and upgrades structure reference; enter next bar open",
       stop:"C=5m structure / sweep extreme only",
       selectedStop:"C",tp1:"1R / 40%",tp2:"2R / 30%",runner:"30% / 1.5 ATR trail",
@@ -113,7 +115,26 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
     leaderboard:{bestByNetR:[...results].sort((a,b)=>b.netR-a.netR)[0]?.variant||null,bestByProfitFactor:[...eligible].sort((a,b)=>b.profitFactor-a.profitFactor)[0]?.variant||null,lowestDrawdown:[...results].filter(x=>x.trades>0).sort((a,b)=>a.maxDrawdownPct-b.maxDrawdownPct)[0]?.variant||null},results};
 }
 function compactPeriodResult(r){return {trades:r.trades,winRate:r.winRate,profitFactor:r.profitFactor,netR:r.netR,endingEquity:r.endingEquity,maxDrawdownPct:r.maxDrawdownPct,long:r.long,short:r.short};}
-function aggregateVariantRuns(v,runs,leverage=5){const all=runs.flatMap(r=>r.__trades||[]).sort((a,b)=>a.entryTs-b.entryTs),diag={};for(const r of runs)for(const[k,val]of Object.entries(r.diagnostics||{}))diag[k]=(diag[k]||0)+(Number(val)||0);return {variant:v.id,name:v.name,description:v.description,...summarizeTradeSequence(all,leverage),diagnostics:diag,periods:runs.map((r,i)=>({index:i+1,trades:r.trades,winRate:r.winRate,profitFactor:r.profitFactor,netR:r.netR,maxDrawdownPct:r.maxDrawdownPct,long:r.long,short:r.short})),recentTrades:all.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:t.entry,exit:t.exitPrice,r:t.r,risk:t.risk,forcedClose:!!t.forcedClose}))};}
+function aggregateVariantRuns(v,runs,leverage=5){const all=runs.flatMap(r=>r.__trades||[]).sort((a,b)=>a.entryTs-b.entryTs),diag={};for(const r of runs)for(const[k,val]of Object.entries(r.diagnostics||{}))diag[k]=(diag[k]||0)+(Number(val)||0);return {variant:v.id,name:v.name,description:v.description,...summarizeTradeSequence(all,leverage),diagnostics:diag,periods:runs.map((r,i)=>({index:i+1,trades:r.trades,winRate:r.winRate,profitFactor:r.profitFactor,netR:r.netR,maxDrawdownPct:r.maxDrawdownPct,long:r.long,short:r.short})),recentTrades:all.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:t.entry,exit:t.exitPrice,r:t.r,risk:t.risk,forcedClose:!!t.forcedClose})),__trades:all};}
+function applyPositionSizing(result){
+  const trades=[...(result.__trades||[])].sort((a,b)=>a.entryTs-b.entryTs);
+  if(!trades.length)return {...result,endingEquity:100,maxDrawdownPct:0,positionSizing:{fixedMargin:5,lastWinPct:5,leverage:10,baseNotional:50,avgMarginU:0,maxMarginU:0,avgNotionalU:0,maxNotionalU:0}};
+  let equity=100,peak=100,maxDD=0,prevWin=false,marginSum=0,notionalSum=0,maxMarginU=0,maxNotionalU=0;
+  for(const t of trades){
+    const margin=prevWin?equity*.05:5;
+    const notional=margin*10;
+    const entry=Number(t.entry)||0,risk=Number(t.risk)||0,r=Number(t.r)||0;
+    const stopPct=entry>0?risk/entry:0;
+    const pnl=notional*stopPct*r;
+    equity+=pnl;
+    peak=Math.max(peak,equity);
+    maxDD=Math.max(maxDD,peak>0?(peak-equity)/peak*100:0);
+    marginSum+=margin;notionalSum+=notional;maxMarginU=Math.max(maxMarginU,margin);maxNotionalU=Math.max(maxNotionalU,notional);
+    t.marginU=+margin.toFixed(4);t.notionalU=+notional.toFixed(4);t.pnlU=+pnl.toFixed(4);t.equityAfter=+equity.toFixed(4);
+    prevWin=r>0.02;
+  }
+  return {...result,endingEquity:+equity.toFixed(2),maxDrawdownPct:+maxDD.toFixed(2),positionSizing:{fixedMargin:5,lastWinPct:5,leverage:10,baseNotional:50,avgMarginU:+(marginSum/trades.length).toFixed(2),maxMarginU:+maxMarginU.toFixed(2),avgNotionalU:+(notionalSum/trades.length).toFixed(2),maxNotionalU:+maxNotionalU.toFixed(2)},recentTrades:trades.slice(-10),__trades:trades};
+}
 function summarizeTradeSequence(trades,leverage=5){
   let equity=100,peak=100,maxDD=0,wins=0,losses=0,breakeven=0,gw=0,gl=0,maxLS=0,ls=0;
   let marginPctSum=0,maxMarginPct=0,marginSamples=0,maxNotionalPct=0,constrainedTrades=0;
@@ -161,13 +182,13 @@ function backtestPage(r){
        <div><small>100U→</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div>
        <div><small>🟢 多</small><b>${x.long?.trades||0} / ${Number(x.long?.netR||0).toFixed(2)}R</b></div>
        <div><small>🔴 空</small><b>${x.short?.trades||0} / ${Number(x.short?.netR||0).toFixed(2)}R</b></div>
-       <div><small>10x平均保證金</small><b>${Number(l.avgMarginPct||0).toFixed(1)}%</b></div>
-       <div><small>10x最高保證金</small><b>${Number(l.maxMarginPct||0).toFixed(1)}%</b></div>
+       <div><small>平均保證金</small><b>${Number(x.positionSizing?.avgMarginU||0).toFixed(2)}U</b></div>
+       <div><small>最高保證金</small><b>${Number(x.positionSizing?.maxMarginU||0).toFixed(2)}U</b></div>
      </div>${diagnostics}
    </section>`
  }).join('');
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
- <title>${r.symbol} V7.3.1 HA Compact</title>
+ <title>${r.symbol} V7.3.2 HA Compact</title>
  <style>
  *{box-sizing:border-box}
  body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
@@ -201,26 +222,26 @@ function backtestPage(r){
  @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
  </style></head><body><main class="wrap">
  <section class="hero">
-   <div class="ey">V7.3.1 HA · ${r.symbol} · 固定10x</div>
+   <div class="ey">V7.3.2 HA · ${r.symbol} · 固定10x</div>
    <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
-   <div class="sub">${r.days}天 · 成本 ${r.costBps}bps</div>
+   <div class="sub">${r.days}天 · 100U本金 · 5U保證金 · 10x · 成本 ${r.costBps}bps</div>
    <div class="ctl">
      <span>模式</span><div class="btn">${btn(['swing','short'],'strategy',x=>x==='swing'?'🧭波段':'⚡短線')}</div>
      <span>幣種</span><div class="btn">${btn(BACKTEST_SYMBOLS,'symbol',x=>x.replace('USDT',''))}</div>
-     <span>期間</span><div class="btn">${btn([7,14,30,90,180,365],'days',x=>x===365?'1年':x+'天')}</div>
+     <span>期間</span><div class="btn">${btn([7,14,30,90],'days',x=>x+'天')}</div>
      <span>方向</span><div class="btn">${btn(['both','long','short'],'tradeMode',x=>x==='both'?'多＋空':x==='long'?'只多':'只空')}</div>
      <span>成本</span><div class="btn">${btn([0,8,12,20],'costBps',x=>x+'bps')}</div>
      ${r.strategy==='short'?`<span>止損</span><div class="btn"><a class="on" href="#">C</a></div>`:''}
    </div>
  </section>
  <section class="note">${r.strategy==='short'
-   ?`V7.3.1 HA Router：1H/15m 平均K判斷方向；Bull 只做多、Bear 只做空、Transition / Chop 不交易；5m 使用真實K執行 BOS → Retest，Sweep 為加分條件、不再強制。止損只保留 C。每筆風險 0.5%。`
+   ?`V7.3.2 HA Router：1H/15m 平均K判斷方向；Bull 只做多、Bear 只做空、Transition / Chop 不交易；5m 使用真實K執行 BOS → Retest，Sweep 為加分條件、不再強制。止損只保留 C。第一單/上一單非盈利用5U保證金；上一單盈利則下一單用當前本金5%保證金。`
    :'波段 C 系列保持既有邏輯，不參與短線重做。'}
  </section>
  ${cards}
  </main></body></html>`
 }
-function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3.1 HA 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
+function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3.2 HA 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
 function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?symbol=SOLUSDT&days=30&mode=both&leverage=10&strategy=short">重試 30 天</a></p></body></html>`}
 
