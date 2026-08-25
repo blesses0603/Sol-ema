@@ -15,24 +15,29 @@ export default {
       });
     }
 
-    if (u.pathname === "/backtest") {
+    if (u.pathname === "/backtest" || u.pathname === "/backtest/api") {
       try {
         const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 365);
         const cache = caches.default;
         const cacheKey = new Request(new URL(`/__backtest_cache?days=${days}`, req.url).toString(), {method:"GET"});
         const cached = await cache.match(cacheKey);
+        let result, cacheState;
         if (cached) {
-          const result = await cached.json();
-          return J({...result, cache:"HIT"});
+          result = await cached.json();
+          cacheState = "HIT";
+        } else {
+          result = await runBacktest({days});
+          cacheState = "MISS";
+          await cache.put(cacheKey, new Response(JSON.stringify(result), {
+            headers:{"content-type":"application/json","cache-control":"public, max-age=900"}
+          }));
         }
-
-        const result = await runBacktest({days});
-        await cache.put(cacheKey, new Response(JSON.stringify(result), {
-          headers:{"content-type":"application/json","cache-control":"public, max-age=900"}
-        }));
-        return J({...result, cache:"MISS"});
+        const output = {...result, cache:cacheState};
+        if (u.pathname === "/backtest/api") return J(output);
+        return new Response(backtestPage(output), {headers:{"content-type":"text/html; charset=UTF-8","cache-control":"no-store"}});
       } catch (e) {
-        return J({error:true,message:e?.message||String(e),time:new Date().toISOString()},500);
+        if (u.pathname === "/backtest/api") return J({error:true,message:e?.message||String(e),time:new Date().toISOString()},500);
+        return new Response(backtestErrorPage(e), {status:500,headers:{"content-type":"text/html; charset=UTF-8","cache-control":"no-store"}});
       }
     }
 
@@ -342,6 +347,20 @@ async function runBacktest({days=30}={}) {
     results
   };
 }
+
+
+function backtestPage(r){
+  const esc=x=>String(x??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const names={A:"A 嚴格版",B:"B 平衡版",C:"C 趨勢版"};
+  const resultById=Object.fromEntries((r.results||[]).map(x=>[x.variant,x]));
+  const cards=["A","B","C"].map(id=>{const x=resultById[id]||{};return `<article class="card"><div class="cardtop"><div><span class="tag">${esc(id)}</span><h2>${names[id]}</h2></div><div class="net ${Number(x.netR)>=0?'pos':'neg'}">${Number(x.netR)>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</div></div><div class="stats"><div><small>交易次數</small><b>${x.trades??0}</b></div><div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div><div><small>Profit Factor</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div><div><small>最大回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div><div><small>最大連敗</small><b>${x.maxLossStreak??0}</b></div><div><small>100U →</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div></div><details><summary>最近交易</summary><div class="trades">${(x.recentTrades||[]).slice().reverse().map(t=>`<div><span>${t.side==='LONG'?'🟢 多':'🔴 空'}</span><span>${Number(t.r)>=0?'+':''}${Number(t.r).toFixed(2)}R</span></div>`).join('')||'沒有交易'}</div></details></article>`}).join('');
+  const lb=r.leaderboard||{};
+  const leader=(id)=>id?`${id} · ${names[id]||id}`:'樣本不足';
+  const buttons=[30,90,180,365].map(d=>`<a class="${Number(r.days)===d?'on':''}" href="/backtest?days=${d}">${d===365?'1年':d+'天'}</a>`).join('');
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0f17"><title>SOL ABC 回測</title><style>*{box-sizing:border-box}body{margin:0;background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif}.w{max-width:900px;margin:auto;padding:16px 12px 40px}.hero,.card,.leader{background:#121925;border:1px solid #263246;border-radius:20px}.hero{padding:18px}.ey,small,.muted{color:#8995a8}.ey{font-size:12px;letter-spacing:.08em}.hero h1{margin:6px 0 4px;font-size:25px}.period{display:flex;gap:8px;overflow:auto;margin-top:15px}.period a{color:#dce4f1;text-decoration:none;padding:9px 13px;border:1px solid #2a374c;border-radius:12px;white-space:nowrap}.period a.on{background:#f5f7fb;color:#0b0f17;font-weight:800}.leader{padding:15px;margin-top:12px;display:grid;gap:9px}.leader div{display:flex;justify-content:space-between;gap:12px}.leader b{text-align:right}.cards{display:grid;gap:12px;margin-top:12px}.card{padding:16px}.cardtop{display:flex;justify-content:space-between;align-items:start;gap:10px}.card h2{font-size:18px;margin:5px 0}.tag{display:inline-block;background:#0d1420;border:1px solid #2a374c;border-radius:8px;padding:3px 8px;font-weight:800}.net{font-size:25px;font-weight:900}.pos{color:#69e6a6}.neg{color:#ff8585}.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:13px}.stats div{background:#0d1420;border:1px solid #202c3f;border-radius:13px;padding:11px}.stats small{display:block;font-size:11px;margin-bottom:4px}.stats b{font-size:17px}details{margin-top:12px}summary{cursor:pointer;color:#cbd5e1}.trades{margin-top:8px;background:#0d1420;border-radius:12px;padding:8px 11px}.trades div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #202c3f}.trades div:last-child{border:0}.foot{font-size:12px;line-height:1.65;color:#8995a8;margin:14px 3px}.foot a{color:#cbd5e1}@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}.stats{grid-template-columns:1fr 1fr}}</style></head><body><main class="w"><section class="hero"><div class="ey">SOLUSDT · ABC BACKTEST</div><h1>📊 策略回測儀表板</h1><div class="muted">${r.days} 天 · 15m + 1h · ${esc(r.source?.m15||'')}</div><nav class="period">${buttons}</nav></section><section class="leader"><div><span>🏆 淨 R 最高</span><b>${leader(lb.bestByNetR)}</b></div><div><span>⚡ PF 最高</span><b>${leader(lb.bestByProfitFactor)}</b></div><div><span>🛡️ 回撤最低</span><b>${leader(lb.lowestDrawdown)}</b></div></section><section class="cards">${cards}</section><div class="foot">風控：每筆 0.5% · SL 1.5 ATR · TP1 1R/30% · TP2 2R/30% · Runner 40%。同根碰 SL/TP 採止損優先。資料快取：${esc(r.cache)}。<br><a href="/backtest/api?days=${r.days}">查看原始 JSON API</a> · <a href="/">返回 SOL Dashboard</a></div></main></body></html>`;
+}
+
+function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?days=30">重試 30 天</a></p></body></html>`}
 
 function simulateVariant(tf15, tf1h, variant) {
   const h1ByTs = tf1h.map(x => [x.ts, x]);
