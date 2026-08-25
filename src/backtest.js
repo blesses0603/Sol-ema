@@ -31,12 +31,18 @@ export async function handleBacktestRequest(req, env, ctx){
     const stopMode="C";
     const costRaw=Number(u.searchParams.get("costbps"));
     const costBps=[0,8,12,20].includes(costRaw)?costRaw:(strategy==="short"?12:8);
-    const clampRsi=(key,def)=>{const n=Number(u.searchParams.get(key));return Number.isFinite(n)?Math.min(100,Math.max(0,n)):def};
-    const rsi={longBos:clampRsi("rsi_lb",50),longRetest:clampRsi("rsi_lr",48),shortBos:clampRsi("rsi_sb",50),shortRetest:clampRsi("rsi_sr",52)};
+    const clampRsi=(key,def)=>{const raw=u.searchParams.get(key);const n=raw===null?NaN:Number(raw);return Number.isFinite(n)?Math.min(100,Math.max(0,n)):def};
+    const makeRange=(minKey,maxKey,defMin,defMax)=>{let min=clampRsi(minKey,defMin),max=clampRsi(maxKey,defMax);if(min>max)[min,max]=[max,min];return{min,max}};
+    const rsi={
+      longBos:makeRange("rsi_lbm","rsi_lbx",50,100),
+      longRetest:makeRange("rsi_lrm","rsi_lrx",48,100),
+      shortBos:makeRange("rsi_sbm","rsi_sbx",0,50),
+      shortRetest:makeRange("rsi_srm","rsi_srx",0,52)
+    };
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v735_entrydiag_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}&rsi_lb=${rsi.longBos}&rsi_lr=${rsi.longRetest}&rsi_sb=${rsi.shortBos}&rsi_sr=${rsi.shortRetest}`,req.url).toString(),
+      new URL(`/__backtest_v737_rsi_range_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}&rsi_lbm=${rsi.longBos.min}&rsi_lbx=${rsi.longBos.max}&rsi_lrm=${rsi.longRetest.min}&rsi_lrx=${rsi.longRetest.max}&rsi_sbm=${rsi.shortBos.min}&rsi_sbx=${rsi.shortBos.max}&rsi_srm=${rsi.shortRetest.min}&rsi_srx=${rsi.shortRetest.max}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -78,10 +84,10 @@ const BT_CHUNK_MS = 15*24*60*60*1000;
 const BT_WARMUP_MS = 50*24*60*60*1000;
 const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 
-async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",rsi={longBos:50,longRetest:48,shortBos:50,shortRetest:52},requestUrl}={}){
+async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",rsi={longBos:{min:50,max:100},longRetest:{min:48,max:100},shortBos:{min:0,max:50},shortRetest:{min:0,max:52}},requestUrl}={}){
   const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3.5-entry-diagnostics",symbol,leverage:10,strategy,costBps,stopMode,rsi,days,tradeMode:mode,progress:prep};
+  if(!prep.complete) return {pending:true,version:"7.3.7-rsi-range",symbol,leverage:10,strategy,costBps,stopMode,rsi,days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
   let results, variants;
   if(strategy==="short"){
@@ -104,7 +110,7 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
   }
   results=results.map(applyPositionSizing);
   const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3.6-rsi-tuning",strategy,costBps,stopMode,rsi,days,tradeMode:mode,leverage:10,
+  return {ok:true,symbol,version:"7.3.7-rsi-range",strategy,costBps,stopMode,rsi,days,tradeMode:mode,leverage:10,
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U保證金；上一單盈利：下一單使用當前本金5%作保證金"},
     sharedRules:strategy==="short"?{
       regime:"V7.3.2 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
@@ -158,7 +164,7 @@ async function loadHistoryRange(a,b,requestUrl,symbol="SOLUSDT"){const cache=cac
 
 function backtestPage(r){
  const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x])),ids=r.strategy==="short"?["SL3","SS3","SCOMB3"]:["C0","CL2","CS2","COMB"];
- const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"C",rsi_lb:r.rsi?.longBos??50,rsi_lr:r.rsi?.longRetest??48,rsi_sb:r.rsi?.shortBos??50,rsi_sr:r.rsi?.shortRetest??52,...e});return`/backtest?${q}`};
+ const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"C",rsi_lbm:r.rsi?.longBos?.min??50,rsi_lbx:r.rsi?.longBos?.max??100,rsi_lrm:r.rsi?.longRetest?.min??48,rsi_lrx:r.rsi?.longRetest?.max??100,rsi_sbm:r.rsi?.shortBos?.min??0,rsi_sbx:r.rsi?.shortBos?.max??50,rsi_srm:r.rsi?.shortRetest?.min??0,rsi_srx:r.rsi?.shortRetest?.max??52,...e});return`/backtest?${q}`};
  const btn=(a,k,lab=x=>x)=>a.map(x=>{
    const queryKey = k==='tradeMode' ? 'mode' : k==='costBps' ? 'costbps' : k==='stopMode' ? 'stop' : k;
    return `<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[queryKey]:x})}">${lab(x)}</a>`;
@@ -237,7 +243,7 @@ function backtestPage(r){
    </section>`
  }).join('');
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
- <title>${r.symbol} V7.3.5 Entry Diagnostics</title>
+ <title>${r.symbol} V7.3.7 RSI Range</title>
  <style>
  *{box-sizing:border-box}
  body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
@@ -281,7 +287,7 @@ function backtestPage(r){
  @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
  </style></head><body><main class="wrap">
  <section class="hero">
-   <div class="ey">V7.3.5 ENTRY DIAG · ${r.symbol} · 固定10x</div>
+   <div class="ey">V7.3.7 RSI RANGE · ${r.symbol} · 固定10x</div>
    <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
    <div class="sub">${r.days}天 · 100U本金 · 5U保證金 · 10x · 成本 ${r.costBps}bps</div>
    <div class="ctl">
@@ -293,16 +299,16 @@ function backtestPage(r){
      ${r.strategy==='short'?`<span>止損</span><div class="btn"><a class="on" href="#">C</a></div>
      <span>RSI</span><form class="rsiForm" method="get" action="/backtest">
        <input type="hidden" name="symbol" value="${r.symbol}"><input type="hidden" name="days" value="${r.days}"><input type="hidden" name="mode" value="${r.tradeMode}"><input type="hidden" name="strategy" value="${r.strategy}"><input type="hidden" name="costbps" value="${r.costBps}">
-       <label>多BOS ≥ <input name="rsi_lb" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longBos??50}"></label>
-       <label>多Retest ≥ <input name="rsi_lr" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longRetest??48}"></label>
-       <label>空BOS ≤ <input name="rsi_sb" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortBos??50}"></label>
-       <label>空Retest ≤ <input name="rsi_sr" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortRetest??52}"></label>
-       <button type="submit">套用 RSI</button>
+       <label>多BOS <input name="rsi_lbm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longBos?.min??50}"> ～ <input name="rsi_lbx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longBos?.max??100}"></label>
+       <label>多Retest <input name="rsi_lrm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longRetest?.min??48}"> ～ <input name="rsi_lrx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longRetest?.max??100}"></label>
+       <label>空BOS <input name="rsi_sbm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortBos?.min??0}"> ～ <input name="rsi_sbx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortBos?.max??50}"></label>
+       <label>空Retest <input name="rsi_srm" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortRetest?.min??0}"> ～ <input name="rsi_srx" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortRetest?.max??52}"></label>
+       <button type="submit">套用 RSI 區間</button>
      </form>`:''}
    </div>
  </section>
  <section class="note">${r.strategy==='short'
-   ?`V7.3.2 HA Router 策略邏輯保持不變；V7.3.4 只新增每筆進場診斷。1H/15m 平均K判斷方向，5m 真實K執行 BOS → Retest，止損 C。第一單/上一單非盈利用5U保證金；上一單盈利則下一單用當前本金5%保證金。`
+   ?`V7.3.7 將 RSI 改為 BOS / Retest 各自可設定 Min～Max 區間；其他 HA Router 與進出場邏輯保持不變。1H/15m 平均K判斷方向，5m 真實K執行 BOS → Retest，止損 C。第一單/上一單非盈利用5U保證金；上一單盈利則下一單用當前本金5%保證金。`
    :'波段 C 系列保持既有邏輯，不參與短線重做。'}
  </section>
  ${cards}
@@ -440,24 +446,24 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     if(!bear&&pendingS){pendingS=null;diag.blockedWrongRegime++}
 
     // Direct BOS path when no sweep setup exists. Structure C is the recent real-candle swing extreme.
-    if(bull&&!pendingL&&b.close>liqHigh&&b.rsi>=rsi.longBos&&b.macdHist>0){
+    if(bull&&!pendingL&&b.close>liqHigh&&b.rsi>=rsi.longBos.min&&b.rsi<=rsi.longBos.max&&b.macdHist>0){
       pendingL={sweepTs:0,sweepIndex:i,structureLow:liqLow,bosLevel:liqHigh,bosTs:b.ts,bosIndex:i,retestUntil:i+6,expires:i+6,hadSweep:false};
       diag.bosLong++;
-    }else if(pendingL&&!pendingL.bosTs&&i>pendingL.sweepIndex&&b.close>pendingL.bosLevel&&b.rsi>=rsi.longBos&&b.macdHist>0){
+    }else if(pendingL&&!pendingL.bosTs&&i>pendingL.sweepIndex&&b.close>pendingL.bosLevel&&b.rsi>=rsi.longBos.min&&b.rsi<=rsi.longBos.max&&b.macdHist>0){
       pendingL.bosTs=b.ts;pendingL.bosIndex=i;pendingL.retestUntil=i+6;diag.bosLong++;
     }
-    if(bear&&!pendingS&&b.close<liqLow&&b.rsi<=rsi.shortBos&&b.macdHist<0){
+    if(bear&&!pendingS&&b.close<liqLow&&b.rsi>=rsi.shortBos.min&&b.rsi<=rsi.shortBos.max&&b.macdHist<0){
       pendingS={sweepTs:0,sweepIndex:i,structureHigh:liqHigh,bosLevel:liqLow,bosTs:b.ts,bosIndex:i,retestUntil:i+6,expires:i+6,hadSweep:false};
       diag.bosShort++;
-    }else if(pendingS&&!pendingS.bosTs&&i>pendingS.sweepIndex&&b.close<pendingS.bosLevel&&b.rsi<=rsi.shortBos&&b.macdHist<0){
+    }else if(pendingS&&!pendingS.bosTs&&i>pendingS.sweepIndex&&b.close<pendingS.bosLevel&&b.rsi>=rsi.shortBos.min&&b.rsi<=rsi.shortBos.max&&b.macdHist<0){
       pendingS.bosTs=b.ts;pendingS.bosIndex=i;pendingS.retestUntil=i+6;diag.bosShort++;
     }
 
     if(pendingL?.bosTs&&i>pendingL.retestUntil){pendingL=null;diag.expiredSetup++}
     if(pendingS?.bosTs&&i>pendingS.retestUntil){pendingS=null;diag.expiredSetup++}
 
-    let L=!!(bull&&pendingL?.bosTs&&i>pendingL.bosIndex&&b.low<=pendingL.bosLevel+b.atr*.15&&b.close>pendingL.bosLevel&&b.close>b.open&&b.rsi>=rsi.longRetest&&b.macdHist>=f[i-1].macdHist);
-    let S=!!(bear&&pendingS?.bosTs&&i>pendingS.bosIndex&&b.high>=pendingS.bosLevel-b.atr*.15&&b.close<pendingS.bosLevel&&b.close<b.open&&b.rsi<=rsi.shortRetest&&b.macdHist<=f[i-1].macdHist);
+    let L=!!(bull&&pendingL?.bosTs&&i>pendingL.bosIndex&&b.low<=pendingL.bosLevel+b.atr*.15&&b.close>pendingL.bosLevel&&b.close>b.open&&b.rsi>=rsi.longRetest.min&&b.rsi<=rsi.longRetest.max&&b.macdHist>=f[i-1].macdHist);
+    let S=!!(bear&&pendingS?.bosTs&&i>pendingS.bosIndex&&b.high>=pendingS.bosLevel-b.atr*.15&&b.close<pendingS.bosLevel&&b.close<b.open&&b.rsi>=rsi.shortRetest.min&&b.rsi<=rsi.shortRetest.max&&b.macdHist<=f[i-1].macdHist);
 
     if(v.id==="SL3")S=false;if(v.id==="SS3")L=false;
     if(mode==="long")S=false;if(mode==="short")L=false;
