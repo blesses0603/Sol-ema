@@ -79,7 +79,7 @@ export default {
         const overall = score>=6?"🟢 強多":score>=2?"🟢 偏多":score<=-6?"🔴 強空":score<=-2?"🔴 偏空":"🟡 震盪";
         const report = {
           symbol: SYMBOL,
-          source: "Bybit SOLUSDT Perpetual",
+          source: "OKX primary / Kraken fallback",
           updatedAt: new Date().toISOString(),
           price: data["15m"].close,
           overall,
@@ -131,7 +131,7 @@ async function buildReport() {
   const overall = score>=6?"🟢 強多":score>=2?"🟢 偏多":score<=-6?"🔴 強空":score<=-2?"🔴 偏空":"🟡 震盪";
   return {
     symbol: SYMBOL,
-    source: "Bybit SOLUSDT Perpetual",
+    source: "OKX primary / Kraken fallback",
     updatedAt: new Date().toISOString(),
     price: data["15m"].close,
     overall,
@@ -160,17 +160,98 @@ async function syncSheetOncePerMinute(report, requestUrl) {
   }
 }
 
-async function calc(label,interval){
-  const r=await fetch(`${BASE}?category=linear&symbol=${SYMBOL}&interval=${interval}&limit=500`,{headers:{Accept:"application/json"}});
-  if(!r.ok) throw Error(`Bybit ${label} HTTP ${r.status}`);
-  const b=await r.json(); if(b.retCode!==0||!b.result?.list?.length) throw Error(`Bybit ${label}: ${b.retMsg||"No data"}`);
-  const c=[...b.result.list].reverse().map(x=>Number(x[4]));
-  const close=c.at(-1),e20=ema(c,20),e50=ema(c,50),e200=ema(c,200),rsi=rsiW(c,14);
-  let score=0;if(e20>e50&&e50>e200)score+=2;else if(e20<e50&&e50<e200)score-=2;if(close>e20)score++;else score--;if(rsi>=55&&rsi<70)score++;else if(rsi>30&&rsi<=45)score--;
-  const trend=score>=3?"🟢 強多":score>=1?"🟢 偏多":score<=-3?"🔴 強空":score<=-1?"🔴 偏空":"🟡 震盪";
-  const rs=rsi>=70?"過熱":rsi<=30?"超賣":rsi>=55?"偏強":rsi<=45?"偏弱":"中性";
-  return {timeframe:label,close:R(close,4),ema20:R(e20,4),ema50:R(e50,4),ema200:R(e200,4),rsi14:R(rsi,2),rsiState:rs,trend,score};
+async function calc(label, interval) {
+  const limit = 260;
+  let closes = null;
+  let source = null;
+
+  // Primary: OKX SOL-USDT-SWAP
+  try {
+    const okxBar = {
+      "240":"4H",
+      "60":"1H",
+      "30":"30m",
+      "15":"15m"
+    }[String(interval)];
+
+    if (!okxBar) throw new Error(`Unsupported OKX interval ${interval}`);
+
+    const url = `https://www.okx.com/api/v5/market/candles?instId=SOL-USDT-SWAP&bar=${encodeURIComponent(okxBar)}&limit=${limit}`;
+    const r = await fetch(url, {
+      headers: {
+        "accept":"application/json",
+        "user-agent":"Mozilla/5.0 SOL-EMA-Monitor/1.0"
+      }
+    });
+    if (!r.ok) throw new Error(`OKX ${label} HTTP ${r.status}`);
+    const j = await r.json();
+    if (j.code !== "0" || !Array.isArray(j.data)) {
+      throw new Error(`OKX ${label} invalid response: ${JSON.stringify(j).slice(0,180)}`);
+    }
+
+    // OKX is newest-first; close is index 4.
+    closes = j.data.map(x => Number(x[4])).filter(Number.isFinite).reverse();
+    if (closes.length < 210) throw new Error(`OKX ${label} insufficient candles ${closes.length}`);
+    source = "OKX SOL-USDT-SWAP";
+  } catch (okxErr) {
+    console.error(`SOURCE DEBUG: OKX ${label} failed`, okxErr?.message || String(okxErr));
+
+    // Fallback: Kraken spot SOL/USD OHLC. This is only a resilience fallback,
+    // so the Sheet explicitly records the actual source.
+    const krakenInterval = Number(interval);
+    const url = `https://api.kraken.com/0/public/OHLC?pair=SOLUSD&interval=${krakenInterval}`;
+    const r = await fetch(url, {
+      headers: {
+        "accept":"application/json",
+        "user-agent":"Mozilla/5.0 SOL-EMA-Monitor/1.0"
+      }
+    });
+    if (!r.ok) throw new Error(`Kraken ${label} HTTP ${r.status}`);
+    const j = await r.json();
+    if (Array.isArray(j.error) && j.error.length) {
+      throw new Error(`Kraken ${label}: ${j.error.join(", ")}`);
+    }
+    const key = Object.keys(j.result || {}).find(k => k !== "last");
+    const rows = key ? j.result[key] : null;
+    if (!Array.isArray(rows)) throw new Error(`Kraken ${label} invalid OHLC response`);
+    closes = rows.map(x => Number(x[4])).filter(Number.isFinite);
+    if (closes.length < 210) throw new Error(`Kraken ${label} insufficient candles ${closes.length}`);
+    source = "Kraken SOL/USD Spot fallback";
+  }
+
+  const e20 = ema(closes,20);
+  const e50 = ema(closes,50);
+  const e200 = ema(closes,200);
+  const r14 = rsi(closes,14);
+  const close = closes[closes.length-1];
+
+  let score = 0;
+  if (close > e20) score++;
+  if (e20 > e50) score++;
+  if (e50 > e200) score++;
+  if (r14 >= 55) score++;
+  if (close < e20) score--;
+  if (e20 < e50) score--;
+  if (e50 < e200) score--;
+  if (r14 <= 45) score--;
+
+  const trend = score>=3?"🟢 強多":score>=1?"🟢 偏多":score<=-3?"🔴 強空":score<=-1?"🔴 偏空":"🟡 震盪";
+  const rsiState = r14>=70?"過熱":r14>=55?"偏強":r14<=30?"超賣":r14<=45?"偏弱":"中性";
+
+  return {
+    label,
+    close:+close.toFixed(4),
+    ema20:+e20.toFixed(4),
+    ema50:+e50.toFixed(4),
+    ema200:+e200.toFixed(4),
+    rsi14:+r14.toFixed(2),
+    rsiState,
+    trend,
+    score,
+    source
+  };
 }
+
 function ema(v,p){let x=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1);for(let i=p;i<v.length;i++)x=v[i]*k+x*(1-k);return x}
 function rsiW(v,p=14){let g=0,l=0;for(let i=1;i<=p;i++){let d=v[i]-v[i-1];g+=Math.max(d,0);l+=Math.max(-d,0)}g/=p;l/=p;for(let i=p+1;i<v.length;i++){let d=v[i]-v[i-1];g=(g*(p-1)+Math.max(d,0))/p;l=(l*(p-1)+Math.max(-d,0))/p}if(l===0)return 100;let rs=g/l;return 100-100/(1+rs)}
 function R(v,d){let p=10**d;return Math.round(v*p)/p}
