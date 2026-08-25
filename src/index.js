@@ -49,19 +49,76 @@ export default {
 
   async scheduled(controller, env, ctx) {
     ctx.waitUntil((async () => {
+      console.log("CRON DEBUG: started", {
+        cron: controller?.cron,
+        scheduledTime: controller?.scheduledTime,
+        now: new Date().toISOString()
+      });
+
       try {
-        const report = await buildReport();
-        const res = await fetch(SHEET_WEBAPP, {
-          method: "POST",
-          headers: {"content-type":"application/json"},
-          body: JSON.stringify(report)
+        const data = {};
+
+        for (const [key, label, interval] of TFS) {
+          console.log(`CRON DEBUG: ${key} fetch start`, {label, interval});
+          try {
+            data[key] = await calc(label, interval);
+            console.log(`CRON DEBUG: ${key} OK`, {
+              close: data[key].close,
+              ema20: data[key].ema20,
+              ema50: data[key].ema50,
+              ema200: data[key].ema200,
+              rsi14: data[key].rsi14
+            });
+          } catch (err) {
+            console.error(`CRON DEBUG: ${key} FAILED`, err?.stack || err?.message || String(err));
+            return;
+          }
+        }
+
+        const score = Object.values(data).reduce((a,x)=>a+x.score,0);
+        const overall = score>=6?"🟢 強多":score>=2?"🟢 偏多":score<=-6?"🔴 強空":score<=-2?"🔴 偏空":"🟡 震盪";
+        const report = {
+          symbol: SYMBOL,
+          source: "Bybit SOLUSDT Perpetual",
+          updatedAt: new Date().toISOString(),
+          price: data["15m"].close,
+          overall,
+          data
+        };
+
+        console.log("CRON DEBUG: report built", {
+          price: report.price,
+          overall: report.overall,
+          updatedAt: report.updatedAt
         });
-        const text = await res.text();
-        if (!res.ok) throw new Error(`Google Sheet HTTP ${res.status}: ${text.slice(0,200)}`);
-        console.log("Cron sheet sync OK", report.updatedAt, text.slice(0,200));
-      } catch (e) {
-        console.log("Cron sheet sync failed:", e?.message || String(e));
-        throw e;
+
+        try {
+          console.log("CRON DEBUG: Google POST start");
+          const res = await fetch(SHEET_WEBAPP, {
+            method: "POST",
+            headers: {"content-type":"application/json"},
+            body: JSON.stringify(report),
+            redirect: "follow"
+          });
+          const text = await res.text();
+          console.log("CRON DEBUG: Google POST response", {
+            status: res.status,
+            ok: res.ok,
+            body: text.slice(0,500)
+          });
+          if (!res.ok) {
+            console.error("CRON DEBUG: Google POST non-2xx");
+            return;
+          }
+        } catch (err) {
+          console.error("CRON DEBUG: Google POST FAILED", err?.stack || err?.message || String(err));
+          return;
+        }
+
+        console.log("CRON DEBUG: COMPLETE SUCCESS", report.updatedAt);
+      } catch (err) {
+        // Do not rethrow during diagnosis, so logs preserve the real failure point.
+        console.error("CRON DEBUG: unexpected failure", err?.stack || err?.message || String(err));
       }
     })());
   }
