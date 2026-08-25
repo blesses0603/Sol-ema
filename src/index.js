@@ -21,7 +21,7 @@ export default {
         const modeRaw = String(u.searchParams.get("mode") || "both").toLowerCase();
         const mode = ["both","long","short"].includes(modeRaw) ? modeRaw : "both";
         const cache = caches.default;
-        const cacheKey = new Request(new URL(`/__backtest_cache?days=${days}&mode=${mode}`, req.url).toString(), {method:"GET"});
+        const cacheKey = new Request(new URL(`/__backtest_v61_cache?days=${days}&mode=${mode}`, req.url).toString(), {method:"GET"});
         const cached = await cache.match(cacheKey);
         let result, cacheState;
         if (cached) {
@@ -331,7 +331,8 @@ async function runBacktest({days=30, mode="both"}={}) {
     symbol:"SOLUSDT",
     market:"USDT perpetual / linear",
     source:{m15:m15Data.source,h1:h1Data.source,h4:h4Data.source},
-    mode:"V6 C-strategy research comparison",
+    mode:"V6.1 C-strategy research comparison",
+    version:"6.1-fixed",
     days,
     tradeMode:mode,
     candles:{m15:m15Data.rows.length,h1:h1Data.rows.length,h4:h4Data.rows.length},
@@ -356,13 +357,13 @@ function backtestPage(r){
   const esc=x=>String(x??"").replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const names={C0:"C Original",CL2:"C-Long V2",CS2:"C-Short V2"};
   const resultById=Object.fromEntries((r.results||[]).map(x=>[x.variant,x]));
-  const cards=["C0","CL2","CS2"].map(id=>{const x=resultById[id]||{};return `<article class="card"><div class="cardtop"><div><span class="tag">${esc(id)}</span><h2>${names[id]}</h2></div><div class="net ${Number(x.netR)>=0?'pos':'neg'}">${Number(x.netR)>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</div></div><div class="desc">${esc(x.description||'')}</div><div class="stats"><div><small>交易次數</small><b>${x.trades??0}</b></div><div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div><div><small>Profit Factor</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div><div><small>最大回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div><div><small>最大連敗</small><b>${x.maxLossStreak??0}</b></div><div><small>100U →</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div><div><small>🟢 多單</small><b>${x.long?.trades??0}筆 · ${Number(x.long?.netR||0)>=0?'+':''}${Number(x.long?.netR||0).toFixed(2)}R</b></div><div><small>🔴 空單</small><b>${x.short?.trades??0}筆 · ${Number(x.short?.netR||0)>=0?'+':''}${Number(x.short?.netR||0).toFixed(2)}R</b></div></div><details><summary>最近交易</summary><div class="trades">${(x.recentTrades||[]).slice().reverse().map(t=>`<div><span>${t.side==='LONG'?'🟢 多':'🔴 空'}</span><span>${Number(t.r)>=0?'+':''}${Number(t.r).toFixed(2)}R</span></div>`).join('')||'沒有交易'}</div></details></article>`}).join('');
+  const cards=["C0","CL2","CS2"].map(id=>{const x=resultById[id]||{};return `<article class="card"><div class="cardtop"><div><span class="tag">${esc(id)}</span><h2>${names[id]}</h2></div><div class="net ${Number(x.netR)>=0?'pos':'neg'}">${Number(x.netR)>=0?'+':''}${Number(x.netR||0).toFixed(2)}R</div></div><div class="desc">${esc(x.description||'')}</div><div class="stats"><div><small>交易次數</small><b>${x.trades??0}</b></div><div><small>勝率</small><b>${Number(x.winRate||0).toFixed(1)}%</b></div><div><small>Profit Factor</small><b>${Number(x.profitFactor||0).toFixed(2)}</b></div><div><small>最大回撤</small><b>${Number(x.maxDrawdownPct||0).toFixed(2)}%</b></div><div><small>最大連敗</small><b>${x.maxLossStreak??0}</b></div><div><small>100U →</small><b>${Number(x.endingEquity||100).toFixed(2)}U</b></div><div><small>🟢 多單</small><b>${x.long?.trades??0}筆 · ${Number(x.long?.netR||0)>=0?'+':''}${Number(x.long?.netR||0).toFixed(2)}R</b></div><div><small>🔴 空單</small><b>${x.short?.trades??0}筆 · ${Number(x.short?.netR||0)>=0?'+':''}${Number(x.short?.netR||0).toFixed(2)}R</b></div></div><details><summary>最近交易</summary><div class="trades">${(x.recentTrades||[]).slice().reverse().map(t=>`<div><span>${t.side==='LONG'?'🟢 多':'🔴 空'}</span><span>${Number(t.r)>=0?'+':''}${Number(t.r).toFixed(2)}R</span></div>`).join('')||'沒有交易'}</div></details><details><summary>診斷</summary><div class="trades">${Object.entries(x.diagnostics||{}).map(([k,v])=>`<div><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('')||'沒有診斷資料'}</div></details></article>`}).join('');
   const lb=r.leaderboard||{};
   const leader=(id)=>id?`${id} · ${names[id]||id}`:'樣本不足';
   const buttons=[30,90,180,365,730,1095,1825].map(d=>`<a class="${Number(r.days)===d?'on':''}" href="/backtest?days=${d}&mode=${r.tradeMode||'both'}">${d===365?'1年':d===730?'2年':d===1095?'3年':d===1825?'5年':d+'天'}</a>`).join('');
   const modes=[["both","多＋空"],["long","只做多"],["short","只做空"]].map(([m,l])=>`<a class="${(r.tradeMode||'both')===m?'on':''}" href="/backtest?days=${r.days}&mode=${m}">${l}</a>`).join('');
   const modeLabel=(r.tradeMode||"both")==="both"?"雙向研究":r.tradeMode==="long"?"只做多":"只做空";
-  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0f17"><title>SOL V6 策略研究</title><style>*{box-sizing:border-box}body{margin:0;background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif}.w{max-width:900px;margin:auto;padding:16px 12px 40px}.hero,.card,.leader{background:#121925;border:1px solid #263246;border-radius:20px}.hero{padding:18px}.ey,small,.muted,.desc{color:#8995a8}.ey{font-size:12px;letter-spacing:.08em}.hero h1{margin:6px 0 4px;font-size:25px}.period{display:flex;gap:8px;overflow:auto;margin-top:12px}.period a{color:#dce4f1;text-decoration:none;padding:9px 13px;border:1px solid #2a374c;border-radius:12px;white-space:nowrap}.period a.on{background:#f5f7fb;color:#0b0f17;font-weight:800}.leader{padding:15px;margin-top:12px;display:grid;gap:9px}.leader div{display:flex;justify-content:space-between;gap:12px}.leader b{text-align:right}.cards{display:grid;gap:12px;margin-top:12px}.card{padding:16px}.cardtop{display:flex;justify-content:space-between;align-items:start;gap:10px}.card h2{font-size:18px;margin:5px 0}.tag{display:inline-block;background:#0d1420;border:1px solid #2a374c;border-radius:8px;padding:3px 8px;font-weight:800}.net{font-size:25px;font-weight:900}.pos{color:#69e6a6}.neg{color:#ff8585}.desc{font-size:12px;line-height:1.5;margin-top:2px}.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:13px}.stats div{background:#0d1420;border:1px solid #202c3f;border-radius:13px;padding:11px}.stats small{display:block;font-size:11px;margin-bottom:4px}.stats b{font-size:16px}details{margin-top:12px}summary{cursor:pointer;color:#cbd5e1}.trades{margin-top:8px;background:#0d1420;border-radius:12px;padding:8px 11px}.trades div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #202c3f}.trades div:last-child{border:0}.foot{font-size:12px;line-height:1.65;color:#8995a8;margin:14px 3px}.foot a{color:#cbd5e1}@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}}</style></head><body><main class="w"><section class="hero"><div class="ey">SOLUSDT · V6 C RESEARCH · 4H / 1H / 15M</div><h1>🧪 C 策略研究回測</h1><div class="muted">${r.days} 天 · ${modeLabel} · 4h + 1h + 15m · ${esc(r.source?.m15||'')}</div><nav class="period">${buttons}</nav><nav class="period">${modes}</nav></section><section class="leader"><div><span>🏆 淨 R 最高</span><b>${leader(lb.bestByNetR)}</b></div><div><span>⚡ PF 最高</span><b>${leader(lb.bestByProfitFactor)}</b></div><div><span>🛡️ 回撤最低</span><b>${leader(lb.lowestDrawdown)}</b></div></section><section class="cards">${cards}</section><div class="foot">C0 保留舊版 C 作基準；CL2 與 CS2 使用 4H regime filter。風控：每筆 0.5% · SL 1.5 ATR · TP1 1R/30% · TP2 2R/30% · Runner 40%。同根碰 SL/TP 採止損優先。<br><a href="/backtest/api?days=${r.days}&mode=${r.tradeMode||'both'}">查看原始 JSON API</a> · <a href="/">返回 SOL Dashboard</a></div></main></body></html>`;
+  return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0f17"><title>SOL V6 策略研究</title><style>*{box-sizing:border-box}body{margin:0;background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif}.w{max-width:900px;margin:auto;padding:16px 12px 40px}.hero,.card,.leader{background:#121925;border:1px solid #263246;border-radius:20px}.hero{padding:18px}.ey,small,.muted,.desc{color:#8995a8}.ey{font-size:12px;letter-spacing:.08em}.hero h1{margin:6px 0 4px;font-size:25px}.period{display:flex;gap:8px;overflow:auto;margin-top:12px}.period a{color:#dce4f1;text-decoration:none;padding:9px 13px;border:1px solid #2a374c;border-radius:12px;white-space:nowrap}.period a.on{background:#f5f7fb;color:#0b0f17;font-weight:800}.leader{padding:15px;margin-top:12px;display:grid;gap:9px}.leader div{display:flex;justify-content:space-between;gap:12px}.leader b{text-align:right}.cards{display:grid;gap:12px;margin-top:12px}.card{padding:16px}.cardtop{display:flex;justify-content:space-between;align-items:start;gap:10px}.card h2{font-size:18px;margin:5px 0}.tag{display:inline-block;background:#0d1420;border:1px solid #2a374c;border-radius:8px;padding:3px 8px;font-weight:800}.net{font-size:25px;font-weight:900}.pos{color:#69e6a6}.neg{color:#ff8585}.desc{font-size:12px;line-height:1.5;margin-top:2px}.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:13px}.stats div{background:#0d1420;border:1px solid #202c3f;border-radius:13px;padding:11px}.stats small{display:block;font-size:11px;margin-bottom:4px}.stats b{font-size:16px}details{margin-top:12px}summary{cursor:pointer;color:#cbd5e1}.trades{margin-top:8px;background:#0d1420;border-radius:12px;padding:8px 11px}.trades div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #202c3f}.trades div:last-child{border:0}.foot{font-size:12px;line-height:1.65;color:#8995a8;margin:14px 3px}.foot a{color:#cbd5e1}@media(min-width:760px){.cards{grid-template-columns:repeat(3,1fr)}}</style></head><body><main class="w"><section class="hero"><div class="ey">SOLUSDT · V6.1 FIXED · 4H / 1H / 15M</div><h1>🧪 C 策略研究回測 V6.1</h1><div class="muted">${r.days} 天 · ${modeLabel} · 4h + 1h + 15m · ${esc(r.source?.m15||'')}</div><nav class="period">${buttons}</nav><nav class="period">${modes}</nav></section><section class="leader"><div><span>🏆 淨 R 最高</span><b>${leader(lb.bestByNetR)}</b></div><div><span>⚡ PF 最高</span><b>${leader(lb.bestByProfitFactor)}</b></div><div><span>🛡️ 回撤最低</span><b>${leader(lb.lowestDrawdown)}</b></div></section><section class="cards">${cards}</section><div class="foot">C0 保留舊版 C 作基準；CL2 與 CS2 使用 4H regime filter。風控：每筆 0.5% · SL 1.5 ATR · TP1 1R/30% · TP2 2R/30% · Runner 40%。同根碰 SL/TP 採止損優先。<br><a href="/backtest/api?days=${r.days}&mode=${r.tradeMode||'both'}">查看原始 JSON API</a> · <a href="/">返回 SOL Dashboard</a></div></main></body></html>`;
 }
 
 function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?days=30">重試 30 天</a></p></body></html>`}
@@ -378,17 +379,35 @@ function simulateVariantV6(tf15, tf1h, tf4h, variant, mode="both") {
   let cooldownUntil = 0, lossPauseUntil = 0;
   let pos = null;
   const trades = [];
+  const diag = {
+    barsScanned:0, ready15m:0, ready1h:0, ready4h:0,
+    trendLong:0, trendShort:0, fourHBull:0, fourHBear:0,
+    pullbackLong:0, pullbackShort:0, breakoutLong:0, breakoutShort:0,
+    momentumLong:0, momentumShort:0, finalLongSignals:0, finalShortSignals:0,
+    blockedByCooldown:0, blockedBy4H:0
+  };
 
   for (let i = 220; i < tf15.length - 1; i++) {
+    diag.barsScanned++;
     const b = tf15[i], prev = tf15[i-1];
     while (h1Idx + 1 < h1ByTs.length && h1ByTs[h1Idx+1][0] <= b.ts) h1Idx++;
     while (h4Idx + 1 < h4ByTs.length && h4ByTs[h4Idx+1][0] <= b.ts) h4Idx++;
     const h = h1ByTs[h1Idx]?.[1];
     const h4 = h4ByTs[h4Idx]?.[1];
-    if (!h || !h4 || !Number.isFinite(h.ema200) || !Number.isFinite(h.adx) || !Number.isFinite(h4.ema200) || !Number.isFinite(b.atr) || !Number.isFinite(b.rsi)) continue;
+
+    if (!Number.isFinite(b.atr) || !Number.isFinite(b.rsi) || !Number.isFinite(b.ema50) || !Number.isFinite(b.macdHist)) continue;
+    diag.ready15m++;
+    if (!h || !Number.isFinite(h.ema200) || !Number.isFinite(h.adx)) continue;
+    diag.ready1h++;
+    const needs4H = variant.id !== "C0";
+    const h4Ready = !!h4 && Number.isFinite(h4.ema20) && Number.isFinite(h4.ema50) && Number.isFinite(h4.ema200);
+    if (h4Ready) diag.ready4h++;
+    if (needs4H && !h4Ready) { diag.blockedBy4H++; continue; }
 
     const barMovePct = (b.high - b.low) / b.open * 100;
-    if ((b.high - b.low) > b.atr * 3 || barMovePct > 4) cooldownUntil = Math.max(cooldownUntil, b.ts + (barMovePct > 7 ? 4*3600e3 : 3600e3));
+    if ((b.high - b.low) > b.atr * 3 || barMovePct > 4) {
+      cooldownUntil = Math.max(cooldownUntil, b.ts + (barMovePct > 7 ? 4*3600e3 : 3600e3));
+    }
 
     if (pos) {
       const outcome = managePosition(pos, b);
@@ -409,17 +428,25 @@ function simulateVariantV6(tf15, tf1h, tf4h, variant, mode="both") {
       continue;
     }
 
-    if (b.ts < cooldownUntil || b.ts < lossPauseUntil) continue;
+    if (b.ts < cooldownUntil || b.ts < lossPauseUntil) { diag.blockedByCooldown++; continue; }
 
     const oneHBull = h.ema20 > h.ema50 && h.ema50 > h.ema200 && h.close > h.ema200;
     const oneHBear = h.ema20 < h.ema50 && h.ema50 < h.ema200 && h.close < h.ema200;
-    const fourHBull = h4.ema20 > h4.ema50 && h4.close > h4.ema200;
-    const fourHBear = h4.ema20 < h4.ema50 && h4.close < h4.ema200;
+    if (oneHBull && h.adx >= 25) diag.trendLong++;
+    if (oneHBear && h.adx >= 25) diag.trendShort++;
+
+    const fourHBull = h4Ready && h4.ema20 > h4.ema50 && h4.close > h4.ema200;
+    const fourHBear = h4Ready && h4.ema20 < h4.ema50 && h4.close < h4.ema200;
+    if (fourHBull) diag.fourHBull++;
+    if (fourHBear) diag.fourHBear++;
+
     const volOK = Number.isFinite(b.volMA20) && b.volume > b.volMA20 * 1.1;
     const macdLong = b.macdHist > 0 && b.macdHist > prev.macdHist;
     const macdShort = b.macdHist < 0 && b.macdHist < prev.macdHist;
     const breakLong = b.close > prev.high;
     const breakShort = b.close < prev.low;
+    if (breakLong) diag.breakoutLong++;
+    if (breakShort) diag.breakoutShort++;
     const recent = tf15.slice(Math.max(0,i-6), i+1);
     const recentLowToEma = recent.some(x=>Number.isFinite(x.ema20) && x.low <= x.ema20);
     const recentHighToEma = recent.some(x=>Number.isFinite(x.ema20) && x.high >= x.ema20);
@@ -427,30 +454,37 @@ function simulateVariantV6(tf15, tf1h, tf4h, variant, mode="both") {
     let longSignal = false, shortSignal = false;
 
     if (variant.id === "C0") {
+      // Exact V5 C baseline. No 4H dependency.
       const pullbackLong = b.low <= b.ema20 && b.close >= b.ema50;
       const pullbackShort = b.high >= b.ema20 && b.close <= b.ema50;
+      if (pullbackLong) diag.pullbackLong++;
+      if (pullbackShort) diag.pullbackShort++;
       const momentumLong = b.rsi >= 50 && (macdLong || volOK);
       const momentumShort = b.rsi <= 50 && (macdShort || volOK);
+      if (momentumLong) diag.momentumLong++;
+      if (momentumShort) diag.momentumShort++;
       longSignal = oneHBull && h.adx >= 25 && pullbackLong && breakLong && momentumLong;
       shortSignal = oneHBear && h.adx >= 25 && pullbackShort && breakShort && momentumShort;
     } else if (variant.id === "CL2") {
-      // Long V2: 4H bull regime + 1H trend + 15m breakout after a recent pullback.
       const rsiZone = b.rsi >= 52 && b.rsi <= 70;
       const structure = b.close > b.ema20 && b.ema20 > b.ema50;
       const momentum = macdLong || volOK;
+      if (recentLowToEma) diag.pullbackLong++;
+      if (momentum) diag.momentumLong++;
       longSignal = fourHBull && oneHBull && h.adx >= 22 && recentLowToEma && structure && breakLong && rsiZone && momentum;
-      shortSignal = false;
     } else if (variant.id === "CS2") {
-      // Short V2: 4H bear regime + 1H trend + 15m rejection/breakdown.
       const rsiZone = b.rsi <= 48 && b.rsi >= 30;
       const structure = b.close < b.ema20 && b.ema20 < b.ema50;
       const momentum = macdShort || volOK;
+      if (recentHighToEma) diag.pullbackShort++;
+      if (momentum) diag.momentumShort++;
       shortSignal = fourHBear && oneHBear && h.adx >= 25 && recentHighToEma && structure && breakShort && rsiZone && momentum;
-      longSignal = false;
     }
 
     if (mode === "long") shortSignal = false;
     if (mode === "short") longSignal = false;
+    if (longSignal) diag.finalLongSignals++;
+    if (shortSignal) diag.finalShortSignals++;
     const side = longSignal ? "LONG" : shortSignal ? "SHORT" : null;
     if (!side) continue;
 
@@ -459,6 +493,21 @@ function simulateVariantV6(tf15, tf1h, tf4h, variant, mode="both") {
     const risk = b.atr * 1.5;
     if (!(risk > 0)) continue;
     pos = makePosition(side, entry, risk, next.ts);
+  }
+
+  // Mark-to-market close any still-open position at the end so short windows don't silently drop it.
+  if (pos && tf15.length) {
+    const last = tf15[tf15.length-1];
+    const dir = pos.side === "LONG" ? 1 : -1;
+    const unrealizedR = ((last.close - pos.entry) * dir) / pos.risk;
+    const r = pos.realizedR + pos.remaining * unrealizedR;
+    equity *= (1 + 0.005 * r);
+    peak = Math.max(peak, equity);
+    maxDD = Math.max(maxDD, (peak - equity) / peak * 100);
+    if (r > 0.02) { wins++; grossWinR += r; }
+    else if (r < -0.02) { losses++; grossLossR += -r; }
+    else breakeven++;
+    trades.push({...pos, exitTs:last.ts, exitPrice:last.close, r:+r.toFixed(3), forcedClose:true});
   }
 
   const total = trades.length;
@@ -476,11 +525,10 @@ function simulateVariantV6(tf15, tf1h, tf4h, variant, mode="both") {
     winRate:total ? +(wins/total*100).toFixed(2) : 0,
     profitFactor:+pf.toFixed(2),netR:+netR.toFixed(2),endingEquity:+equity.toFixed(2),
     maxDrawdownPct:+maxDD.toFixed(2),maxLossStreak,
-    long:sideStats("LONG"),short:sideStats("SHORT"),
-    recentTrades:trades.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:+t.entry.toFixed(4),exit:+t.exitPrice.toFixed(4),r:t.r}))
+    long:sideStats("LONG"),short:sideStats("SHORT"),diagnostics:diag,
+    recentTrades:trades.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:+t.entry.toFixed(4),exit:+t.exitPrice.toFixed(4),r:t.r,forcedClose:!!t.forcedClose}))
   };
 }
-
 function makePosition(side, entry, risk, entryTs) {
   const dir = side === "LONG" ? 1 : -1;
   return {
@@ -537,14 +585,14 @@ async function fetchHistory(interval, days) {
     return {rows, source:"Bybit SOLUSDT linear"};
   } catch (bybitErr) {
     console.error("BACKTEST SOURCE: Bybit failed", interval, bybitErr?.message || String(bybitErr));
-    const okxBar = interval === "15" ? "15m" : "1H";
+    const okxBar = interval === "15" ? "15m" : interval === "60" ? "1H" : interval === "240" ? "4H" : `${interval}m`;
     const rows = await fetchOkxHistoryThrottled(okxBar, days);
     return {rows, source:"OKX SOL-USDT-SWAP fallback"};
   }
 }
 
 async function fetchBybitHistory(interval, days) {
-  const ms = interval === "15" ? 15*60e3 : 60*60e3;
+  const ms = interval === "15" ? 15*60e3 : interval === "60" ? 60*60e3 : interval === "240" ? 4*60*60e3 : Number(interval)*60e3;
   const target = Math.ceil(days*24*60*60e3/ms) + 260;
   let out = [];
   let end = Date.now();
@@ -579,7 +627,7 @@ async function fetchBybitHistory(interval, days) {
 }
 
 async function fetchOkxHistoryThrottled(bar, days) {
-  const ms = bar === "15m" ? 15*60e3 : 60*60e3;
+  const ms = bar === "15m" ? 15*60e3 : bar === "1H" ? 60*60e3 : bar === "4H" ? 4*60*60e3 : 60*60e3;
   const target = Math.ceil(days*24*60*60e3/ms) + 260;
   let out = [];
   let after = null;
