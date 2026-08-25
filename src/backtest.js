@@ -78,7 +78,7 @@ const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="short",costBps=12,stopMode="C",requestUrl}={}){
   const now=Date.now(),coreStart=now-days*86400e3,dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,"SOLUSDT");
-  if(!prep.complete)return{pending:true,version:"8.0.0-sol-signal-engine",symbol:"SOLUSDT",leverage:10,strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,progress:prep};
+  if(!prep.complete)return{pending:true,version:"8.1.0-quality-gate",symbol:"SOLUSDT",leverage:10,strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,"SOLUSDT");
   const f=buildIndicators(raw.m5),m=buildIndicators(raw.m15);
   const variants=[
@@ -89,13 +89,13 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
   let results=variants.map(v=>simulateV8Sol(f,m,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps}));
   results=results.map(applyPositionSizing);
   return{
-    ok:true,symbol:"SOLUSDT",version:"8.0.0-sol-signal-engine",strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,leverage:10,
+    ok:true,symbol:"SOLUSDT",version:"8.1.0-quality-gate",strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,leverage:10,
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U；上一單盈利：下一單使用當前本金5%"},
     sharedRules:{
       bias:"15m EMA20/50 + EMA20 slope defines directional bias; neutral allows both sides only with stronger trigger score",
-      entry:"5m multi-trigger score: pullback, momentum, BOS, EMA reclaim/reject, sweep; score >= 2 enters",
-      frequencyGoal:"KPI: 每個交易日自然產生 10+ 訊號；不強制湊單",
-      stop:"5m ATR/structure hybrid",tp1:"0.8R / 50%",tp2:"1.5R / 30%",runner:"20% / 1.2 ATR trail",
+      entry:"候選訊號：5m multi-trigger >=2；實際進場：Quality Score >=6 + 15m 同向 + 強觸發",
+      frequencyGoal:"KPI 分離：候選訊號維持 10+/日；Quality Gate 只讓高品質訊號成交",
+      stop:"5m ATR/structure hybrid；拒絕過寬 stop",tp1:"1.0R / 35%",tp2:"2.0R / 35%",runner:"30% / 1.3 ATR trail",
       cooldown:"同方向 15 分鐘；出場後不設 30 分鐘全域冷卻"
     },
     results
@@ -149,11 +149,13 @@ function backtestPage(r){
    const x=by[id]||{},f=x.signalFrequency||{},ps=x.positionSizing||{};
    return`<section class="card"><div class="top"><div><h2>${x.name||id}</h2><p>${x.description||""}</p></div><b class="${x.netR>=0?"p":"n"}">${x.netR>=0?"+":""}${Number(x.netR||0).toFixed(2)}R</b></div>
    <div class="kpi">
-    <div><small>訊號/日</small><strong>${Number(f.avgPerDay||0).toFixed(1)}</strong></div>
+    <div><small>候選/日</small><strong>${Number(f.avgPerDay||0).toFixed(1)}</strong></div>
     <div><small>10+達標天</small><strong class="${f.daysBelow10===0?"p":""}">${f.days10Plus||0}/${f.days||0}</strong></div>
     <div><small>最低/日</small><strong>${f.minPerDay??0}</strong></div>
     <div><small>最高/日</small><strong>${f.maxPerDay??0}</strong></div>
     <div><small>成交</small><strong>${x.trades||0}</strong></div>
+    <div><small>成交/日</small><strong>${Number((x.trades||0)/Math.max(1,f.days||1)).toFixed(1)}</strong></div>
+    <div><small>品質通過</small><strong>${x.diagnostics?.qualityPassed||0}</strong></div>
     <div><small>勝率</small><strong>${Number(x.winRate||0).toFixed(1)}%</strong></div>
     <div><small>PF</small><strong>${Number(x.profitFactor||0).toFixed(2)}</strong></div>
     <div><small>回撤</small><strong>${Number(x.maxDrawdownPct||0).toFixed(2)}%</strong></div>
@@ -162,13 +164,13 @@ function backtestPage(r){
    </div></section>`
  }).join("");
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
- <title>SOL V8 Signal Engine</title><style>
+ <title>SOL V8.1 Quality Gate</title><style>
  *{box-sizing:border-box}body{margin:0;padding:7px;background:#0b0f17;color:#f5f7fb;font-family:system-ui}.wrap{max-width:760px;margin:auto}.hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:13px;padding:10px;margin-bottom:7px}.ey,small,p{color:#91a0b5}.ey{font-size:10px}h1{font-size:20px;margin:4px 0}h2{font-size:15px;margin:0}p{font-size:10px;margin:2px 0}.row{display:grid;grid-template-columns:42px 1fr;gap:5px;align-items:center;margin-top:5px}.row>span{font-size:10px}.btn{display:flex;gap:4px;flex-wrap:wrap}.btn a{font-size:11px;color:#fff;text-decoration:none;border:1px solid #34435c;border-radius:7px;padding:5px 8px}.btn a.on{background:#f4f6f8;color:#111}.top{display:flex;justify-content:space-between;gap:8px}.top>b{font-size:19px}.p{color:#58d99b!important}.n{color:#ff7e87!important}.kpi{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:8px}.kpi div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px}.kpi small{display:block;font-size:9px}.kpi strong{font-size:12px}@media(min-width:520px){.kpi{grid-template-columns:repeat(5,1fr)}}
- </style></head><body><main class="wrap"><section class="hero"><div class="ey">V8.0 SOL ONLY · 5m SIGNAL ENGINE · 10x</div><h1>⚡ SOL 多訊號短線引擎</h1><p>${r.days}天 · 100U · 基礎保證金5U · 成本${r.costBps}bps</p>
+ </style></head><body><main class="wrap"><section class="hero"><div class="ey">V8.1 SOL ONLY · QUALITY GATE · 10x</div><h1>⚡ SOL 多訊號短線引擎</h1><p>${r.days}天 · 100U · 基礎保證金5U · 成本${r.costBps}bps</p>
  <div class="row"><span>期間</span><div class="btn">${btn([7,14,30,90],"days",x=>x+"天")}</div></div>
  <div class="row"><span>方向</span><div class="btn">${btn(["both","long","short"],"tradeMode",x=>x==="both"?"多＋空":x==="long"?"只多":"只空")}</div></div>
  <div class="row"><span>成本</span><div class="btn">${btn([0,8,12,20],"costBps",x=>x+"bps")}</div></div></section>
- <section class="note"><b>目標：</b>每個交易日自然產生 10+ 個交易訊號，不強制湊單。15m 只負責方向偏置；5m 可由 Pullback / Momentum / BOS / EMA reclaim-reject / Sweep 多種觸發形成訊號。</section>${cards}</main></body></html>`
+ <section class="note"><b>V8.1：</b>把「候選訊號」與「實際成交」拆開。5m 繼續大量掃描 Pullback / Momentum / BOS / EMA reclaim-reject / Sweep；只有 15m 同向、Quality Score ≥ 6 且包含強觸發才成交。目標：候選 10+/日，同時優先拉高 PF、壓低回撤。</section>${cards}</main></body></html>`
 }
 function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3.2 HA 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
@@ -186,12 +188,12 @@ function addHeikinAshi(rows){
 }
 
 function simulateV8Sol(f,m,v,mode="both",o={}){
-  let mi=0,pos=null,lastLongSignal=0,lastShortSignal=0;
+  let mi=0,pos=null,lastLongEntry=0,lastShortEntry=0;
   const trades=[],signals=[],costBps=Number(o.costBps??12);
-  const diag={pullbackLong:0,pullbackShort:0,momentumLong:0,momentumShort:0,bosLong:0,bosShort:0,reclaimLong:0,rejectShort:0,sweepLong:0,sweepShort:0,longSignals:0,shortSignals:0};
+  const diag={pullbackLong:0,pullbackShort:0,momentumLong:0,momentumShort:0,bosLong:0,bosShort:0,reclaimLong:0,rejectShort:0,sweepLong:0,sweepShort:0,longSignals:0,shortSignals:0,qualityPassed:0,qualityRejected:0,biasRejected:0,stopRejected:0,busySkipped:0};
 
-  const pushSignal=(side,b,score,triggers,bias)=>{
-    signals.push({ts:b.ts,side,score,triggers:[...triggers],bias});
+  const pushCandidate=(side,b,score,triggers,bias,quality)=>{
+    signals.push({ts:b.ts,side,score,triggers:[...triggers],bias,quality});
     if(side==="LONG")diag.longSignals++;else diag.shortSignals++;
   };
 
@@ -199,18 +201,8 @@ function simulateV8Sol(f,m,v,mode="both",o={}){
     const b=f[i],p=f[i-1];
     while(mi+1<m.length&&m[mi+1].ts<=b.ts)mi++;
     const M=m[mi];
-    if(!M||![b.atr,b.rsi,b.macdHist,b.ema20,b.ema50,M.ema20,M.ema50].every(Number.isFinite))continue;
+    if(!M||![b.atr,b.rsi,b.macdHist,b.ema20,b.ema50,b.adx,M.ema20,M.ema50,M.adx].every(Number.isFinite))continue;
     if(b.ts<o.tradeStartTs)continue;if(b.ts>o.tradeEndTs)break;
-
-    if(pos){
-      const z=manageV8Position(pos,b);
-      if(z.done){
-        const feeR=(costBps/10000)/(pos.risk/pos.entry);
-        trades.push({...pos,exitTs:b.ts,exitPrice:z.p,r:+(z.r-feeR).toFixed(3)});
-        pos=null;
-      }
-      continue;
-    }
 
     const slope20=M.ema20-(m[Math.max(0,mi-2)]?.ema20??M.ema20);
     const bullBias=M.ema20>M.ema50&&slope20>0;
@@ -221,7 +213,6 @@ function simulateV8Sol(f,m,v,mode="both",o={}){
     if(prior.length<6)continue;
     const hi=Math.max(...prior.map(x=>x.high)),lo=Math.min(...prior.map(x=>x.low));
     const atr=Math.max(b.atr,1e-9);
-
     const longT=[],shortT=[];
     if(b.low<=b.ema20+.15*atr&&b.close>b.ema20&&b.close>b.open){longT.push("PULLBACK");diag.pullbackLong++}
     if(b.high>=b.ema20-.15*atr&&b.close<b.ema20&&b.close<b.open){shortT.push("PULLBACK");diag.pullbackShort++}
@@ -234,31 +225,53 @@ function simulateV8Sol(f,m,v,mode="both",o={}){
     if(b.low<lo&&b.close>lo&&b.close>b.open){longT.push("SWEEP");diag.sweepLong++}
     if(b.high>hi&&b.close<hi&&b.close<b.open){shortT.push("SWEEP");diag.sweepShort++}
 
-    let lScore=longT.length+(bullBias?1:0),sScore=shortT.length+(bearBias?1:0);
-    if(bearBias)lScore-=1;if(bullBias)sScore-=1;
+    // Candidate layer: preserves V8's high-frequency scanner. It is counted even while a position is open.
+    const lCandidate=mode!=="short"&&v.id!=="V8S"&&longT.length>=2;
+    const sCandidate=mode!=="long"&&v.id!=="V8L"&&shortT.length>=2;
 
-    let L=mode!=="short"&&v.id!=="V8S"&&lScore>=2;
-    let S=mode!=="long"&&v.id!=="V8L"&&sScore>=2;
-    if(L&&S){if(lScore>sScore)S=false;else if(sScore>lScore)L=false;else{L=false;S=false}}
+    const longStrong=longT.some(x=>x==="BOS"||x==="SWEEP"||x==="MOMENTUM");
+    const shortStrong=shortT.some(x=>x==="BOS"||x==="SWEEP"||x==="MOMENTUM");
+    const longTrend=b.close>b.ema20&&b.ema20>b.ema50;
+    const shortTrend=b.close<b.ema20&&b.ema20<b.ema50;
+    const adxOK=b.adx>=18&&M.adx>=16;
+    const longRsi=b.rsi>=48&&b.rsi<=72;
+    const shortRsi=b.rsi>=28&&b.rsi<=52;
+    const lQ=longT.length+(bullBias?2:0)+(longTrend?1:0)+(adxOK?1:0)+(longRsi?1:0)+(longStrong?1:0)-(bearBias?3:0);
+    const sQ=shortT.length+(bearBias?2:0)+(shortTrend?1:0)+(adxOK?1:0)+(shortRsi?1:0)+(shortStrong?1:0)-(bullBias?3:0);
 
-    if(L&&b.ts-lastLongSignal>=15*60e3){
-      pushSignal("LONG",b,lScore,longT,bias);lastLongSignal=b.ts;
-      const entry=f[i+1].open;
-      const structure=Math.min(...f.slice(Math.max(0,i-5),i+1).map(x=>x.low));
-      let stop=Math.min(entry-.65*atr,structure);
-      let risk=entry-stop;
-      if(risk>0&&risk/entry<.04){
-        pos=makeV8Position("LONG",entry,risk,stop,f[i+1].ts,{score:lScore,triggers:longT,bias,rsi:b.rsi,macdHist:b.macdHist});
-      }
-    }else if(S&&b.ts-lastShortSignal>=15*60e3){
-      pushSignal("SHORT",b,sScore,shortT,bias);lastShortSignal=b.ts;
-      const entry=f[i+1].open;
-      const structure=Math.max(...f.slice(Math.max(0,i-5),i+1).map(x=>x.high));
-      let stop=Math.max(entry+.65*atr,structure);
-      let risk=stop-entry;
-      if(risk>0&&risk/entry<.04){
-        pos=makeV8Position("SHORT",entry,risk,stop,f[i+1].ts,{score:sScore,triggers:shortT,bias,rsi:b.rsi,macdHist:b.macdHist});
-      }
+    if(lCandidate)pushCandidate("LONG",b,longT.length,longT,bias,lQ);
+    if(sCandidate)pushCandidate("SHORT",b,shortT.length,shortT,bias,sQ);
+
+    // Manage an existing position after candidate collection, so frequency KPI is not distorted by holding time.
+    if(pos){
+      const z=manageV8Position(pos,b);
+      if(z.done){
+        const feeR=(costBps/10000)/(pos.risk/pos.entry);
+        trades.push({...pos,exitTs:b.ts,exitPrice:z.p,r:+(z.r-feeR).toFixed(3)});
+        pos=null;
+      }else{diag.busySkipped++;continue;}
+    }
+
+    let L=lCandidate&&bullBias&&longStrong&&lQ>=6;
+    let S=sCandidate&&bearBias&&shortStrong&&sQ>=6;
+    if(lCandidate&&!L){diag.qualityRejected++;if(!bullBias)diag.biasRejected++}
+    if(sCandidate&&!S){diag.qualityRejected++;if(!bearBias)diag.biasRejected++}
+    if(L&&S){if(lQ>sQ)S=false;else if(sQ>lQ)L=false;else{L=false;S=false}}
+
+    if(L&&b.ts-lastLongEntry>=15*60e3){
+      const entry=f[i+1].open,structure=Math.min(...f.slice(Math.max(0,i-5),i+1).map(x=>x.low));
+      const stop=Math.min(entry-.70*atr,structure),risk=entry-stop,stopPct=risk/entry;
+      if(risk>0&&stopPct>=.0035&&stopPct<=.025){
+        diag.qualityPassed++;lastLongEntry=b.ts;
+        pos=makeV8Position("LONG",entry,risk,stop,f[i+1].ts,{quality:lQ,triggers:longT,bias,rsi:b.rsi,adx:b.adx,macdHist:b.macdHist});
+      }else diag.stopRejected++;
+    }else if(S&&b.ts-lastShortEntry>=15*60e3){
+      const entry=f[i+1].open,structure=Math.max(...f.slice(Math.max(0,i-5),i+1).map(x=>x.high));
+      const stop=Math.max(entry+.70*atr,structure),risk=stop-entry,stopPct=risk/entry;
+      if(risk>0&&stopPct>=.0035&&stopPct<=.025){
+        diag.qualityPassed++;lastShortEntry=b.ts;
+        pos=makeV8Position("SHORT",entry,risk,stop,f[i+1].ts,{quality:sQ,triggers:shortT,bias,rsi:b.rsi,adx:b.adx,macdHist:b.macdHist});
+      }else diag.stopRejected++;
     }
   }
 
@@ -267,21 +280,20 @@ function simulateV8Sol(f,m,v,mode="both",o={}){
     const rr=pos.real+pos.rem*((q.close-pos.entry)*d/pos.risk)-(costBps/10000)/(pos.risk/pos.entry);
     trades.push({...pos,exitTs:q.ts,exitPrice:q.close,r:+rr.toFixed(3),forcedClose:true});
   }
-
   const freq=summarizeSignalFrequency(signals,o.tradeStartTs,o.tradeEndTs);
   return{variant:v.id,name:v.name,description:v.description,...summarizeTradeSequence(trades,10),diagnostics:diag,signalFrequency:freq,recentTrades:trades.slice(-10),__trades:trades,__signals:signals};
 }
 
 function makeV8Position(side,entry,risk,stop,entryTs,entryDiag){
   const d=side==="LONG"?1:-1;
-  return{side,entry,entryTs,risk,stop,initialStop:stop,tp1:entry+d*risk*.8,tp2:entry+d*risk*1.5,rem:1,real:0,tp1Hit:false,tp2Hit:false,trail:null,entryDiag};
+  return{side,entry,entryTs,risk,stop,initialStop:stop,tp1:entry+d*risk*1.0,tp2:entry+d*risk*2.0,rem:1,real:0,tp1Hit:false,tp2Hit:false,trail:null,entryDiag};
 }
 function manageV8Position(p,x){
   const L=p.side==="LONG";
-  if(L?x.low<=p.stop:x.high>=p.stop)return{done:true,r:p.real+p.rem*(p.stop===p.entry?0:-1),p:p.stop};
-  if(!p.tp1Hit&&(L?x.high>=p.tp1:x.low<=p.tp1)){p.tp1Hit=true;p.real+=.40;p.rem-=.50;p.stop=p.entry}
-  if(!p.tp2Hit&&(L?x.high>=p.tp2:x.low<=p.tp2)){p.tp2Hit=true;p.real+=.45;p.rem-=.30;p.trail=L?x.close-1.2*x.atr:x.close+1.2*x.atr}
-  if(p.tp2Hit){const n=L?x.close-1.2*x.atr:x.close+1.2*x.atr;p.trail=p.trail==null?n:(L?Math.max(p.trail,n):Math.min(p.trail,n));if(L?x.low<=p.trail:x.high>=p.trail){const rr=L?(p.trail-p.entry)/p.risk:(p.entry-p.trail)/p.risk;return{done:true,r:p.real+p.rem*rr,p:p.trail}}}
+  if(L?x.low<=p.stop:x.high>=p.stop){const rr=(p.stop-p.entry)*(L?1:-1)/p.risk;return{done:true,r:p.real+p.rem*rr,p:p.stop}}
+  if(!p.tp1Hit&&(L?x.high>=p.tp1:x.low<=p.tp1)){p.tp1Hit=true;p.real+=.35;p.rem-=.35;p.stop=p.entry}
+  if(!p.tp2Hit&&(L?x.high>=p.tp2:x.low<=p.tp2)){p.tp2Hit=true;p.real+=.70;p.rem-=.35;p.trail=L?x.close-1.3*x.atr:x.close+1.3*x.atr}
+  if(p.tp2Hit){const n=L?x.close-1.3*x.atr:x.close+1.3*x.atr;p.trail=p.trail==null?n:(L?Math.max(p.trail,n):Math.min(p.trail,n));if(L?x.low<=p.trail:x.high>=p.trail){const rr=L?(p.trail-p.entry)/p.risk:(p.entry-p.trail)/p.risk;return{done:true,r:p.real+p.rem*rr,p:p.trail}}}
   return{done:false};
 }
 function summarizeSignalFrequency(signals,start,end){
