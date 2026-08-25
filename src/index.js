@@ -17,7 +17,7 @@ export default {
 
     if (u.pathname === "/backtest") {
       try {
-        const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 60);
+        const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 365);
         const cache = caches.default;
         const cacheKey = new Request(new URL(`/__backtest_cache?days=${days}`, req.url).toString(), {method:"GET"});
         const cached = await cache.match(cacheKey);
