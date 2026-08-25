@@ -18,8 +18,19 @@ export default {
     if (u.pathname === "/backtest") {
       try {
         const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 60);
+        const cache = caches.default;
+        const cacheKey = new Request(new URL(`/__backtest_cache?days=${days}`, req.url).toString(), {method:"GET"});
+        const cached = await cache.match(cacheKey);
+        if (cached) {
+          const result = await cached.json();
+          return J({...result, cache:"HIT"});
+        }
+
         const result = await runBacktest({days});
-        return J(result);
+        await cache.put(cacheKey, new Response(JSON.stringify(result), {
+          headers:{"content-type":"application/json","cache-control":"public, max-age=900"}
+        }));
+        return J({...result, cache:"MISS"});
       } catch (e) {
         return J({error:true,message:e?.message||String(e),time:new Date().toISOString()},500);
       }
@@ -274,10 +285,12 @@ function page(r){
 }
 
 async function runBacktest({days=30}={}) {
-  const [m15,h1] = await Promise.all([
-    fetchOkxHistory("15m", days),
-    fetchOkxHistory("1H", days)
-  ]);
+  // Use Bybit linear SOLUSDT first: up to 1000 candles per request, which
+  // dramatically reduces request count. OKX is a throttled fallback only.
+  const m15Data = await fetchHistory("15", days);
+  const h1Data = await fetchHistory("60", days);
+  const m15 = m15Data.rows;
+  const h1 = h1Data.rows;
 
   const tf1h = buildIndicators(h1);
   const tf15 = buildIndicators(m15);
@@ -301,15 +314,17 @@ async function runBacktest({days=30}={}) {
   ];
 
   const results = variants.map(v => simulateVariant(tf15, tf1h, v));
+  const eligiblePF = results.filter(x=>x.trades>=5);
   const byNetR = [...results].sort((a,b)=>b.netR-a.netR)[0]?.variant || null;
-  const byPF = [...results].sort((a,b)=>b.profitFactor-a.profitFactor)[0]?.variant || null;
+  const byPF = [...eligiblePF].sort((a,b)=>b.profitFactor-a.profitFactor)[0]?.variant || null;
   const byDD = [...results].sort((a,b)=>a.maxDrawdownPct-b.maxDrawdownPct)[0]?.variant || null;
 
   return {
     ok:true,
-    symbol:"SOL-USDT-SWAP",
-    source:"OKX",
-    mode:"ABC synchronized comparison",
+    symbol:"SOLUSDT",
+    market:"USDT perpetual / linear",
+    source:{m15:m15Data.source,h1:h1Data.source},
+    mode:"ABC synchronized comparison V2",
     days,
     candles:{m15:m15.length,h1:h1.length},
     sharedRules:{
@@ -320,6 +335,7 @@ async function runBacktest({days=30}={}) {
       runner:"40% with 1.5 ATR trailing",
       riskPerTradePct:0.5,
       volatilityCooldown:"1h if >3 ATR or >4%; 4h if >7%",
+      threeLossCooldown:"6 hours",
       sameBarConflict:"stop first (conservative)"
     },
     leaderboard:{bestByNetR:byNetR,bestByProfitFactor:byPF,lowestDrawdown:byDD},
@@ -335,6 +351,7 @@ function simulateVariant(tf15, tf1h, variant) {
   let grossWinR = 0, grossLossR = 0;
   let maxLossStreak = 0, lossStreak = 0;
   let cooldownUntil = 0;
+  let lossPauseUntil = 0;
   let pos = null;
   const trades = [];
 
@@ -356,17 +373,25 @@ function simulateVariant(tf15, tf1h, variant) {
         equity *= (1 + 0.005 * r);
         peak = Math.max(peak, equity);
         maxDD = Math.max(maxDD, (peak - equity) / peak * 100);
-        if (r > 0.02) { wins++; grossWinR += r; lossStreak = 0; }
-        else if (r < -0.02) { losses++; grossLossR += -r; lossStreak++; maxLossStreak = Math.max(maxLossStreak, lossStreak); }
-        else { breakeven++; lossStreak = 0; }
+        if (r > 0.02) {
+          wins++; grossWinR += r; lossStreak = 0;
+        } else if (r < -0.02) {
+          losses++; grossLossR += -r; lossStreak++;
+          maxLossStreak = Math.max(maxLossStreak, lossStreak);
+          if (lossStreak >= 3) {
+            lossPauseUntil = b.ts + 6*3600e3;
+            lossStreak = 0;
+          }
+        } else {
+          breakeven++; lossStreak = 0;
+        }
         trades.push({...pos, exitTs:b.ts, exitPrice:outcome.exitPrice, r:+r.toFixed(3)});
         pos = null;
       }
       continue;
     }
 
-    if (b.ts < cooldownUntil) continue;
-    if (lossStreak >= 3) continue;
+    if (b.ts < cooldownUntil || b.ts < lossPauseUntil) continue;
 
     const longBase = h.ema20 > h.ema50 && h.ema50 > h.ema200 && h.close > h.ema200;
     const shortBase = h.ema20 < h.ema50 && h.ema50 < h.ema200 && h.close < h.ema200;
@@ -478,28 +503,115 @@ function managePosition(p, b) {
   return {done:false};
 }
 
-async function fetchOkxHistory(bar, days) {
+async function fetchHistory(interval, days) {
+  try {
+    const rows = await fetchBybitHistory(interval, days);
+    return {rows, source:"Bybit SOLUSDT linear"};
+  } catch (bybitErr) {
+    console.error("BACKTEST SOURCE: Bybit failed", interval, bybitErr?.message || String(bybitErr));
+    const okxBar = interval === "15" ? "15m" : "1H";
+    const rows = await fetchOkxHistoryThrottled(okxBar, days);
+    return {rows, source:"OKX SOL-USDT-SWAP fallback"};
+  }
+}
+
+async function fetchBybitHistory(interval, days) {
+  const ms = interval === "15" ? 15*60e3 : 60*60e3;
+  const target = Math.ceil(days*24*60*60e3/ms) + 260;
+  let out = [];
+  let end = Date.now();
+  let pages = 0;
+
+  while (out.length < target && pages < 12) {
+    const url = `${BASE}?category=linear&symbol=${SYMBOL}&interval=${interval}&end=${end}&limit=1000`;
+    const r = await fetchWithRetry(url, {label:`Bybit ${interval}m`, retries:4});
+    const j = await r.json();
+    const list = j?.result?.list;
+    if (j?.retCode !== 0 || !Array.isArray(list) || !list.length) {
+      throw new Error(`Bybit ${interval}m invalid response: ${JSON.stringify(j).slice(0,180)}`);
+    }
+    const batch = list.map(x => ({
+      ts:Number(x[0]), open:Number(x[1]), high:Number(x[2]), low:Number(x[3]), close:Number(x[4]), volume:Number(x[5])
+    })).filter(x => Object.values(x).every(Number.isFinite));
+    if (!batch.length) break;
+    out.push(...batch);
+    const oldest = Math.min(...batch.map(x=>x.ts));
+    if (!(oldest < end)) break;
+    end = oldest - 1;
+    pages++;
+    if (batch.length < 1000) break;
+    await sleep(150);
+  }
+
+  const uniq = new Map(out.map(x=>[x.ts,x]));
+  const rows = [...uniq.values()].sort((a,b)=>a.ts-b.ts).slice(-target);
+  if (rows.length < Math.min(target, 260)) throw new Error(`Bybit ${interval}m insufficient candles ${rows.length}`);
+  return rows;
+}
+
+async function fetchOkxHistoryThrottled(bar, days) {
   const ms = bar === "15m" ? 15*60e3 : 60*60e3;
   const target = Math.ceil(days*24*60*60e3/ms) + 260;
   let out = [];
   let after = null;
-  while (out.length < target) {
-    let url = `https://www.okx.com/api/v5/market/history-candles?instId=SOL-USDT-SWAP&bar=${encodeURIComponent(bar)}&limit=300`;
+  let pages = 0;
+
+  while (out.length < target && pages < 80) {
+    let url = `https://www.okx.com/api/v5/market/history-candles?instId=SOL-USDT-SWAP&bar=${encodeURIComponent(bar)}&limit=100`;
     if (after) url += `&after=${after}`;
-    const r = await fetch(url,{headers:{"accept":"application/json","user-agent":"Mozilla/5.0 SOL-Backtest/1.0"}});
-    if (!r.ok) throw new Error(`OKX history ${bar} HTTP ${r.status}`);
+    const r = await fetchWithRetry(url, {label:`OKX history ${bar}`, retries:5});
     const j = await r.json();
-    if (j.code !== "0" || !Array.isArray(j.data) || !j.data.length) throw new Error(`OKX history ${bar} invalid response`);
+    if (j.code !== "0" || !Array.isArray(j.data) || !j.data.length) {
+      throw new Error(`OKX history ${bar} invalid response: ${JSON.stringify(j).slice(0,180)}`);
+    }
     const batch = j.data.map(x => ({
       ts:Number(x[0]), open:Number(x[1]), high:Number(x[2]), low:Number(x[3]), close:Number(x[4]), volume:Number(x[5])
     })).filter(x => Object.values(x).every(Number.isFinite));
+    if (!batch.length) break;
     out.push(...batch);
-    after = String(batch[batch.length-1].ts);
+    const oldest = Math.min(...batch.map(x=>x.ts));
+    after = String(oldest);
+    pages++;
     if (batch.length < 100) break;
+    // OKX public limits are IP-based; Cloudflare egress IPs may be shared,
+    // so stay deliberately below the documented ceiling.
+    await sleep(750);
   }
+
   const uniq = new Map(out.map(x=>[x.ts,x]));
-  return [...uniq.values()].sort((a,b)=>a.ts-b.ts).slice(-target);
+  const rows = [...uniq.values()].sort((a,b)=>a.ts-b.ts).slice(-target);
+  if (rows.length < Math.min(target, 260)) throw new Error(`OKX ${bar} insufficient candles ${rows.length}`);
+  return rows;
 }
+
+async function fetchWithRetry(url, {label="request", retries=4}={}) {
+  let lastErr = null;
+  for (let attempt=0; attempt<=retries; attempt++) {
+    try {
+      const r = await fetch(url, {headers:{"accept":"application/json","user-agent":"Mozilla/5.0 SOL-Backtest/2.0"}});
+      if (r.ok) return r;
+      const retryable = r.status === 429 || r.status >= 500;
+      if (!retryable) throw new Error(`${label} HTTP ${r.status}`);
+      lastErr = new Error(`${label} HTTP ${r.status}`);
+      if (attempt >= retries) break;
+      const retryAfter = Number(r.headers.get("retry-after"));
+      const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : Math.min(1000 * (2 ** attempt), 8000);
+      console.log("BACKTEST RETRY", {label,status:r.status,attempt:attempt+1,waitMs});
+      await sleep(waitMs);
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= retries) break;
+      const waitMs = Math.min(1000 * (2 ** attempt), 8000);
+      console.log("BACKTEST RETRY ERROR", {label,attempt:attempt+1,waitMs,message:e?.message||String(e)});
+      await sleep(waitMs);
+    }
+  }
+  throw lastErr || new Error(`${label} failed`);
+}
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 function buildIndicators(rows) {
   const c = rows.map(x=>x.close), h = rows.map(x=>x.high), l = rows.map(x=>x.low), v = rows.map(x=>x.volume);
