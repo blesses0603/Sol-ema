@@ -1,6 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "solusdc-indicator",
+  "name": "sol-ema",
   "main": "src/index.js",
-  "compatibility_date": "2026-08-25"
+  "compatibility_date": "2026-08-25",
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  }
 }
