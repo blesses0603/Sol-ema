@@ -31,10 +31,12 @@ export async function handleBacktestRequest(req, env, ctx){
     const stopMode="C";
     const costRaw=Number(u.searchParams.get("costbps"));
     const costBps=[0,8,12,20].includes(costRaw)?costRaw:(strategy==="short"?12:8);
+    const clampRsi=(key,def)=>{const n=Number(u.searchParams.get(key));return Number.isFinite(n)?Math.min(100,Math.max(0,n)):def};
+    const rsi={longBos:clampRsi("rsi_lb",50),longRetest:clampRsi("rsi_lr",48),shortBos:clampRsi("rsi_sb",50),shortRetest:clampRsi("rsi_sr",52)};
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v735_entrydiag_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
+      new URL(`/__backtest_v735_entrydiag_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}&rsi_lb=${rsi.longBos}&rsi_lr=${rsi.longRetest}&rsi_sb=${rsi.shortBos}&rsi_sr=${rsi.shortRetest}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -46,7 +48,7 @@ export async function handleBacktestRequest(req, env, ctx){
       return new Response(backtestPage(output),{headers:{"content-type":"text/html; charset=UTF-8","cache-control":"no-store"}});
     }
 
-    const result=await runBacktestStaged({days,mode,symbol,leverage,strategy,costBps,stopMode,requestUrl:req.url});
+    const result=await runBacktestStaged({days,mode,symbol,leverage,strategy,costBps,stopMode,rsi,requestUrl:req.url});
 
     if(result.pending){
       if(u.pathname==="/backtest/api")return J(result,202);
@@ -76,10 +78,10 @@ const BT_CHUNK_MS = 15*24*60*60*1000;
 const BT_WARMUP_MS = 50*24*60*60*1000;
 const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 
-async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",requestUrl}={}){
+async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",rsi={longBos:50,longRetest:48,shortBos:50,shortRetest:52},requestUrl}={}){
   const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3.5-entry-diagnostics",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
+  if(!prep.complete) return {pending:true,version:"7.3.5-entry-diagnostics",symbol,leverage:10,strategy,costBps,stopMode,rsi,days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
   let results, variants;
   if(strategy==="short"){
@@ -89,7 +91,7 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
       {id:"SS3",name:"S-Short V3.1",description:"HA Router Bear · BOS → Retest（Sweep 加分）"},
       {id:"SCOMB3",name:"S Combined V3.1",description:"HA Regime Router 自動決定多 / 空 / 等待"}
     ];
-    results=variants.map(v=>simulateShortV73(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps,leverage:10,stopMode}));
+    results=variants.map(v=>simulateShortV73(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps,leverage:10,stopMode,rsi}));
   }else{
     variants=[
       {id:"C0",name:"C Original",description:"既有波段基準"},
@@ -102,7 +104,7 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
   }
   results=results.map(applyPositionSizing);
   const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3.5-entry-diagnostics",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
+  return {ok:true,symbol,version:"7.3.6-rsi-tuning",strategy,costBps,stopMode,rsi,days,tradeMode:mode,leverage:10,
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U保證金；上一單盈利：下一單使用當前本金5%作保證金"},
     sharedRules:strategy==="short"?{
       regime:"V7.3.2 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
@@ -156,7 +158,7 @@ async function loadHistoryRange(a,b,requestUrl,symbol="SOLUSDT"){const cache=cac
 
 function backtestPage(r){
  const by=Object.fromEntries((r.results||[]).map(x=>[x.variant,x])),ids=r.strategy==="short"?["SL3","SS3","SCOMB3"]:["C0","CL2","CS2","COMB"];
- const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"C",...e});return`/backtest?${q}`};
+ const keep=e=>{const q=new URLSearchParams({symbol:r.symbol,days:r.days,mode:r.tradeMode,strategy:r.strategy,costbps:r.costBps,stop:r.stopMode||"C",rsi_lb:r.rsi?.longBos??50,rsi_lr:r.rsi?.longRetest??48,rsi_sb:r.rsi?.shortBos??50,rsi_sr:r.rsi?.shortRetest??52,...e});return`/backtest?${q}`};
  const btn=(a,k,lab=x=>x)=>a.map(x=>{
    const queryKey = k==='tradeMode' ? 'mode' : k==='costBps' ? 'costbps' : k==='stopMode' ? 'stop' : k;
    return `<a class="${String(r[k])===String(x)?'on':''}" href="${keep({[queryKey]:x})}">${lab(x)}</a>`;
@@ -288,7 +290,15 @@ function backtestPage(r){
      <span>期間</span><div class="btn">${btn([7,14,30,90],'days',x=>x+'天')}</div>
      <span>方向</span><div class="btn">${btn(['both','long','short'],'tradeMode',x=>x==='both'?'多＋空':x==='long'?'只多':'只空')}</div>
      <span>成本</span><div class="btn">${btn([0,8,12,20],'costBps',x=>x+'bps')}</div>
-     ${r.strategy==='short'?`<span>止損</span><div class="btn"><a class="on" href="#">C</a></div>`:''}
+     ${r.strategy==='short'?`<span>止損</span><div class="btn"><a class="on" href="#">C</a></div>
+     <span>RSI</span><form class="rsiForm" method="get" action="/backtest">
+       <input type="hidden" name="symbol" value="${r.symbol}"><input type="hidden" name="days" value="${r.days}"><input type="hidden" name="mode" value="${r.tradeMode}"><input type="hidden" name="strategy" value="${r.strategy}"><input type="hidden" name="costbps" value="${r.costBps}">
+       <label>多BOS ≥ <input name="rsi_lb" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longBos??50}"></label>
+       <label>多Retest ≥ <input name="rsi_lr" type="number" min="0" max="100" step="0.5" value="${r.rsi?.longRetest??48}"></label>
+       <label>空BOS ≤ <input name="rsi_sb" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortBos??50}"></label>
+       <label>空Retest ≤ <input name="rsi_sr" type="number" min="0" max="100" step="0.5" value="${r.rsi?.shortRetest??52}"></label>
+       <button type="submit">套用 RSI</button>
+     </form>`:''}
    </div>
  </section>
  <section class="note">${r.strategy==='short'
@@ -322,7 +332,7 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     longSignals:0,shortSignals:0,expiredSetup:0,blockedDaily:0,blockedCooldown:0,
     blockedMargin:0,invalidStop:0,blockedWrongRegime:0
   };
-  const costBps=Number(o.costBps??12), stopMode="C";
+  const costBps=Number(o.costBps??12), stopMode="C", rsi=o.rsi||{longBos:50,longRetest:48,shortBos:50,shortRetest:52};
 
   function classifyRegime(H,M,mi){
     if(!H||!M) return "TRANSITION";
@@ -430,24 +440,24 @@ function simulateShortV73(f,m,h,v,mode="both",o={}){
     if(!bear&&pendingS){pendingS=null;diag.blockedWrongRegime++}
 
     // Direct BOS path when no sweep setup exists. Structure C is the recent real-candle swing extreme.
-    if(bull&&!pendingL&&b.close>liqHigh&&b.rsi>=50&&b.macdHist>0){
+    if(bull&&!pendingL&&b.close>liqHigh&&b.rsi>=rsi.longBos&&b.macdHist>0){
       pendingL={sweepTs:0,sweepIndex:i,structureLow:liqLow,bosLevel:liqHigh,bosTs:b.ts,bosIndex:i,retestUntil:i+6,expires:i+6,hadSweep:false};
       diag.bosLong++;
-    }else if(pendingL&&!pendingL.bosTs&&i>pendingL.sweepIndex&&b.close>pendingL.bosLevel&&b.rsi>=50&&b.macdHist>0){
+    }else if(pendingL&&!pendingL.bosTs&&i>pendingL.sweepIndex&&b.close>pendingL.bosLevel&&b.rsi>=rsi.longBos&&b.macdHist>0){
       pendingL.bosTs=b.ts;pendingL.bosIndex=i;pendingL.retestUntil=i+6;diag.bosLong++;
     }
-    if(bear&&!pendingS&&b.close<liqLow&&b.rsi<=50&&b.macdHist<0){
+    if(bear&&!pendingS&&b.close<liqLow&&b.rsi<=rsi.shortBos&&b.macdHist<0){
       pendingS={sweepTs:0,sweepIndex:i,structureHigh:liqHigh,bosLevel:liqLow,bosTs:b.ts,bosIndex:i,retestUntil:i+6,expires:i+6,hadSweep:false};
       diag.bosShort++;
-    }else if(pendingS&&!pendingS.bosTs&&i>pendingS.sweepIndex&&b.close<pendingS.bosLevel&&b.rsi<=50&&b.macdHist<0){
+    }else if(pendingS&&!pendingS.bosTs&&i>pendingS.sweepIndex&&b.close<pendingS.bosLevel&&b.rsi<=rsi.shortBos&&b.macdHist<0){
       pendingS.bosTs=b.ts;pendingS.bosIndex=i;pendingS.retestUntil=i+6;diag.bosShort++;
     }
 
     if(pendingL?.bosTs&&i>pendingL.retestUntil){pendingL=null;diag.expiredSetup++}
     if(pendingS?.bosTs&&i>pendingS.retestUntil){pendingS=null;diag.expiredSetup++}
 
-    let L=!!(bull&&pendingL?.bosTs&&i>pendingL.bosIndex&&b.low<=pendingL.bosLevel+b.atr*.15&&b.close>pendingL.bosLevel&&b.close>b.open&&b.rsi>=48&&b.macdHist>=f[i-1].macdHist);
-    let S=!!(bear&&pendingS?.bosTs&&i>pendingS.bosIndex&&b.high>=pendingS.bosLevel-b.atr*.15&&b.close<pendingS.bosLevel&&b.close<b.open&&b.rsi<=52&&b.macdHist<=f[i-1].macdHist);
+    let L=!!(bull&&pendingL?.bosTs&&i>pendingL.bosIndex&&b.low<=pendingL.bosLevel+b.atr*.15&&b.close>pendingL.bosLevel&&b.close>b.open&&b.rsi>=rsi.longRetest&&b.macdHist>=f[i-1].macdHist);
+    let S=!!(bear&&pendingS?.bosTs&&i>pendingS.bosIndex&&b.high>=pendingS.bosLevel-b.atr*.15&&b.close<pendingS.bosLevel&&b.close<b.open&&b.rsi<=rsi.shortRetest&&b.macdHist<=f[i-1].macdHist);
 
     if(v.id==="SL3")S=false;if(v.id==="SS3")L=false;
     if(mode==="long")S=false;if(mode==="short")L=false;
