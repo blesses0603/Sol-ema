@@ -83,9 +83,9 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
   const raw=await loadHistoryRange(dataStart,now,requestUrl,"SOLUSDT");
   const f=buildIndicators(raw.m5),m=buildIndicators(addHeikinAshi(raw.m15)),h=buildIndicators(addHeikinAshi(raw.h1));
   const variants=[
-    {id:"V8L",name:"V8.6.3 Long",description:"1H + 15m HA Router · 5m Adaptive Gate · Long unchanged"},
-    {id:"V8S",name:"V8.6.3 Short",description:"1H + 15m HA Router · Balanced Short Gate · structure-confirmed"},
-    {id:"V8C",name:"V8.6.3 Combined",description:"Adaptive Long + Balanced Short split"}
+    {id:"V8L",name:"V8.6.3 多",description:"1H + 15m HA Router · 5m Adaptive Gate · 多單邏輯維持"},
+    {id:"V8S",name:"V8.6.3 空",description:"1H + 15m HA Router · 平衡空單 Gate · structure-confirmed"},
+    {id:"V8C",name:"V8.6.3 綜合",description:"Adaptive 多單 + 平衡空單分流"}
   ];
   let results=variants.map(v=>simulateV86AdaptiveGate(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps}));
   results=results.map(applyPositionSizing);
@@ -94,7 +94,7 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U；上一單盈利：下一單使用當前本金5%"},
     sharedRules:{
       bias:"1H HA + 15m HA/EMA20/50 同向才進場；Transition 不做一般趨勢單",
-      entry:"Long 維持 Adaptive 2/3/4；Short Balanced Gate：強 Bear / 一般 Bear 都至少3觸發，Transition 禁止做空，且必須含 BOS / EMA_REJECT / SWEEP 結構觸發",
+      entry:"多單維持 Adaptive 2/3/4；空單平衡 Gate：強 Bear / 一般 Bear 都至少3觸發，Transition 禁止做空，且必須含 BOS / EMA_REJECT / SWEEP 結構觸發",
       frequencyGoal:"不再硬性追成交數；保留候選池，依市場狀態自動調整 2/3/4 Gate",
       stop:"5m ATR/structure hybrid；拒絕過寬 stop",tp1:"1.0R / 40%",tp2:"無固定 TP2",runner:"60% / 1.3 ATR trail；+0.7R 後保本；30m Time Stop",
       cooldown:"同方向 15 分鐘；出場後不設 30 分鐘全域冷卻"
@@ -157,7 +157,7 @@ function backtestPage(r){
     <div><small>成交</small><strong>${x.trades||0}</strong></div>
     <div><small>成交/日</small><strong>${Number((x.trades||0)/Math.max(1,f.days||1)).toFixed(1)}</strong></div>
     <div><small>品質通過</small><strong>${x.diagnostics?.qualityPassed||0}</strong></div>
-    <div><small>Long/Short通過</small><strong>${x.diagnostics?.longPassed||0}/${x.diagnostics?.shortPassed||0}</strong></div>
+    <div><small>多/空通過</small><strong>${x.diagnostics?.longPassed||0}/${x.diagnostics?.shortPassed||0}</strong></div>
     <div><small>Gate 2/3/4</small><strong>${x.diagnostics?.gateStrong||0}/${x.diagnostics?.gateNormal||0}/${x.diagnostics?.gateTransition||0}</strong></div>
     <div><small>勝率</small><strong>${Number(x.winRate||0).toFixed(1)}%</strong></div>
     <div><small>PF</small><strong>${Number(x.profitFactor||0).toFixed(2)}</strong></div>
@@ -167,15 +167,15 @@ function backtestPage(r){
    </div></section>`
  }).join("");
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
- <title>SOL V8.6.3 Balanced Short Gate</title><style>
+ <title>SOL V8.6.3 平衡空單 Gate</title><style>
  *{box-sizing:border-box}body{margin:0;padding:7px;background:#0b0f17;color:#f5f7fb;font-family:system-ui}.wrap{max-width:760px;margin:auto}.hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:13px;padding:10px;margin-bottom:7px}.ey,small,p{color:#91a0b5}.ey{font-size:10px}h1{font-size:20px;margin:4px 0}h2{font-size:15px;margin:0}p{font-size:10px;margin:2px 0}.row{display:grid;grid-template-columns:42px 1fr;gap:5px;align-items:center;margin-top:5px}.row>span{font-size:10px}.btn{display:flex;gap:4px;flex-wrap:wrap}.btn a{font-size:11px;color:#fff;text-decoration:none;border:1px solid #34435c;border-radius:7px;padding:5px 8px}.btn a.on{background:#f4f6f8;color:#111}.top{display:flex;justify-content:space-between;gap:8px}.top>b{font-size:19px}.p{color:#58d99b!important}.n{color:#ff7e87!important}.kpi{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:8px}.kpi div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px}.kpi small{display:block;font-size:9px}.kpi strong{font-size:12px}@media(min-width:520px){.kpi{grid-template-columns:repeat(5,1fr)}}
  </style></head><body><main class="wrap"><section class="hero"><div class="ey">V8.6.3 SOL ONLY · BALANCED SHORT · BINANCE VIP0 · 10x</div><h1>⚡ SOL 多訊號短線引擎</h1><p>${r.days}天 · 100U · 基礎保證金5U · Binance VIP0 · 往返約${r.costBps}bps</p>
  <div class="row"><span>期間</span><div class="btn">${btn([7,14,30,90],"days",x=>x+"天")}</div></div>
  <div class="row"><span>方向</span><div class="btn">${btn(["both","long","short"],"tradeMode",x=>x==="both"?"多＋空":x==="long"?"只多":"只空")}</div></div>
  <div class="row"><span>成本</span><div class="btn"><a class="on">Binance VIP0</a></div></div></section>
- <section class="note"><b>V8.6.3 Balanced Short Gate：</b>Long 維持 V8.6 Adaptive Gate；Short 強 Bear / 一般 Bear 都至少 3 觸發，Transition / 弱 Bear 仍不做空；空單必須包含 BOS / EMA_REJECT / SWEEP 至少一種結構觸發。15m 與 5m EMA20/50 仍須同步向下，但 ADX、斜率與波動門檻稍微放鬆，讓有效空單恢復。出場維持 +0.7R 保本、1R 出40%、60% 1.3 ATR Runner、30m Time Stop；Binance VIP0 固定往返約10bps。</section>${cards}</main></body></html>`
+ <section class="note"><b>V8.6.3 平衡空單 Gate：</b>多單維持 V8.6 Adaptive Gate；空單強 Bear / 一般 Bear 都至少 3 觸發，Transition / 弱 Bear 仍不做空；空單必須包含 BOS / EMA_REJECT / SWEEP 至少一種結構觸發。15m 與 5m EMA20/50 仍須同步向下，但 ADX、斜率與波動門檻稍微放鬆，讓有效空單恢復。出場維持 +0.7R 保本、1R 出40%、60% 1.3 ATR Runner、30m Time Stop；Binance VIP0 固定往返約10bps。</section>${cards}</main></body></html>`
 }
-function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V8.6.3 Balanced Short Gate 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
+function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V8.6.3 平衡空單 Gate 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
 function backtestErrorPage(e){const m=String(e?.message||e||'Unknown error').replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));return `<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:24px"><h2>⚠️ 回測失敗</h2><p>${m}</p><p><a style="color:#fff" href="/backtest?symbol=SOLUSDT&days=30&mode=both&leverage=10&strategy=short">重試 30 天</a></p></body></html>`}
 
@@ -228,7 +228,7 @@ function simulateV86AdaptiveGate(f,m,h,v,mode="both",o={}){
     const shortMacroOK=bearRouter&&H.adx>=14&&M.adx>=16&&mSlope<=0;
     const lQ=longT.length+(bullRouter?3:0)+(b.close>b.ema20&&b.ema20>b.ema50?1:0)+(b.adx>=20?1:0)+(b.rsi>=48&&b.rsi<=70?1:0)+(longStrong?1:0)+(strongTrend?1:0)+(trendStrength>=0.50?1:0);
     const sQ=shortT.length+(bearRouter?3:0)+(b.close<b.ema20&&b.ema20<b.ema50?1:0)+(b.adx>=18?1:0)+(b.rsi>=28&&b.rsi<=56?1:0)+(shortStrong?1:0)+(strongTrend?1:0);
-    // Long underperformed in the prior 90D sample, so its quality threshold is intentionally stricter.
+    // 多單先前 90D 表現較弱，因此品質門檻刻意較嚴。
     const longQNeed=strongTrend?8:9, shortQNeed=8;
     let L=lCandidate&&bullRouter&&longStrong&&slopeLong&&volLongOK&&lQ>=longQNeed, S=sCandidate&&shortMacroOK&&shortStrong&&shortStructure&&!shortMomentumOnly&&slopeShort&&volShortOK&&sQ>=shortQNeed;
     if(lCandidate&&!L){diag.qualityRejected++;if(!bullRouter)diag.biasRejected++} if(sCandidate&&!S){diag.qualityRejected++;if(!bearRouter)diag.biasRejected++}
