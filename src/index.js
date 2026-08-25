@@ -474,7 +474,7 @@ function simulateVariantV6(tf15, tf1h, tf4h, variant, mode="both", {tradeStartTs
       if (recentHighToEma) diag.pullbackShort++;
       if (momentum) diag.momentumShort++;
       shortSignal = fourHBear && oneHBear && h.adx >= 25 && recentHighToEma && structure && breakShort && rsiZone && momentum;
-     else if (variant.id === "COMB") {
+    } else if (variant.id === "COMB") {
       const longRsi=b.rsi>=52&&b.rsi<=70,longStructure=b.close>b.ema20&&b.ema20>b.ema50,longMomentum=macdLong||volOK;
       const shortRsi=b.rsi<=48&&b.rsi>=30,shortStructure=b.close<b.ema20&&b.ema20<b.ema50,shortMomentum=macdShort||volOK;
       if(recentLowToEma)diag.pullbackLong++; if(recentHighToEma)diag.pullbackShort++; if(longMomentum)diag.momentumLong++; if(shortMomentum)diag.momentumShort++;
