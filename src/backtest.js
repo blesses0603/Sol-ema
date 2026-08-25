@@ -78,7 +78,7 @@ const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="short",costBps=10,stopMode="C",requestUrl}={}){
   const now=Date.now(),coreStart=now-days*86400e3,dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,"SOLUSDT");
-  if(!prep.complete)return{pending:true,version:"8.5.0-quality-gate",symbol:"SOLUSDT",leverage:10,strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,progress:prep};
+  if(!prep.complete)return{pending:true,version:"8.6.0-adaptive-gate",symbol:"SOLUSDT",leverage:10,strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,"SOLUSDT");
   const f=buildIndicators(raw.m5),m=buildIndicators(addHeikinAshi(raw.m15)),h=buildIndicators(addHeikinAshi(raw.h1));
   const variants=[
@@ -86,10 +86,10 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
     {id:"V8S",name:"V8 Short",description:"15m bias · 5m multi-trigger"},
     {id:"V8C",name:"V8 Combined",description:"SOL 5m 多訊號引擎"}
   ];
-  let results=variants.map(v=>simulateV85QualityGate(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps}));
+  let results=variants.map(v=>simulateV86AdaptiveGate(f,m,h,v,mode,{tradeStartTs:coreStart,tradeEndTs:now,costBps}));
   results=results.map(applyPositionSizing);
   return{
-    ok:true,symbol:"SOLUSDT",version:"8.5.0-quality-gate",strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,leverage:10,
+    ok:true,symbol:"SOLUSDT",version:"8.6.0-adaptive-gate",strategy:"short",costBps,stopMode:"C",days,tradeMode:mode,leverage:10,
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U；上一單盈利：下一單使用當前本金5%"},
     sharedRules:{
       bias:"15m EMA20/50 + EMA20 slope defines directional bias; neutral allows both sides only with stronger trigger score",
@@ -166,11 +166,11 @@ function backtestPage(r){
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
  <title>SOL V8.3 HA Router Hybrid</title><style>
  *{box-sizing:border-box}body{margin:0;padding:7px;background:#0b0f17;color:#f5f7fb;font-family:system-ui}.wrap{max-width:760px;margin:auto}.hero,.card,.note{background:#111a27;border:1px solid #263348;border-radius:13px;padding:10px;margin-bottom:7px}.ey,small,p{color:#91a0b5}.ey{font-size:10px}h1{font-size:20px;margin:4px 0}h2{font-size:15px;margin:0}p{font-size:10px;margin:2px 0}.row{display:grid;grid-template-columns:42px 1fr;gap:5px;align-items:center;margin-top:5px}.row>span{font-size:10px}.btn{display:flex;gap:4px;flex-wrap:wrap}.btn a{font-size:11px;color:#fff;text-decoration:none;border:1px solid #34435c;border-radius:7px;padding:5px 8px}.btn a.on{background:#f4f6f8;color:#111}.top{display:flex;justify-content:space-between;gap:8px}.top>b{font-size:19px}.p{color:#58d99b!important}.n{color:#ff7e87!important}.kpi{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:8px}.kpi div{background:#0b1420;border:1px solid #202d42;border-radius:8px;padding:6px}.kpi small{display:block;font-size:9px}.kpi strong{font-size:12px}@media(min-width:520px){.kpi{grid-template-columns:repeat(5,1fr)}}
- </style></head><body><main class="wrap"><section class="hero"><div class="ey">V8.5 SOL ONLY · QUALITY GATE · BINANCE VIP0 · 10x</div><h1>⚡ SOL 多訊號短線引擎</h1><p>${r.days}天 · 100U · 基礎保證金5U · Binance VIP0 · 往返約${r.costBps}bps</p>
+ </style></head><body><main class="wrap"><section class="hero"><div class="ey">V8.6 SOL ONLY · QUALITY GATE · BINANCE VIP0 · 10x</div><h1>⚡ SOL 多訊號短線引擎</h1><p>${r.days}天 · 100U · 基礎保證金5U · Binance VIP0 · 往返約${r.costBps}bps</p>
  <div class="row"><span>期間</span><div class="btn">${btn([7,14,30,90],"days",x=>x+"天")}</div></div>
  <div class="row"><span>方向</span><div class="btn">${btn(["both","long","short"],"tradeMode",x=>x==="both"?"多＋空":x==="long"?"只多":"只空")}</div></div>
  <div class="row"><span>成本</span><div class="btn"><a class="on">Binance VIP0</a></div></div></section>
- <section class="note"><b>V8.5：</b>保留 1H + 15m HA Router；5m 至少 3 個觸發共振，加入 EMA20/50 斜率與低波動過濾。出場維持 +0.7R 保本、1R 出 40%、60% 1.3 ATR Runner、30m Time Stop；成本固定 Binance VIP0。</section>${cards}</main></body></html>`
+ <section class="note"><b>V8.6：</b>保留 1H + 15m HA Router；5m 至少 3 個觸發共振，加入 EMA20/50 斜率與低波動過濾。出場維持 +0.7R 保本、1R 出 40%、60% 1.3 ATR Runner、30m Time Stop；成本固定 Binance VIP0。</section>${cards}</main></body></html>`
 }
 function backtestProgressPage(r){const p=r.progress||{},pct=p.totalChunks?Math.min(100,Math.round(p.readyChunks/p.totalChunks*100)):0;return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1"><title>準備回測資料</title></head><body style="margin:0;background:#0b0f17;color:#fff;font-family:system-ui;padding:22px"><div style="max-width:620px;margin:auto;background:#111a27;border:1px solid #263348;border-radius:18px;padding:20px"><div style="color:#91a0b5">${r.symbol||'SOLUSDT'} V7.3.2 HA 歷史資料分批快取</div><h2>⏳ 準備 ${r.days} 天回測資料</h2><div style="font-size:32px;font-weight:800">${pct}%</div><div style="height:14px;background:#0b1420;border-radius:99px;overflow:hidden;margin:16px 0"><i style="display:block;height:100%;width:${pct}%;background:#dbe7f7"></i></div><p>${p.readyChunks||0} / ${p.totalChunks||0} 個 15 天區塊完成</p><p style="color:#91a0b5;line-height:1.6">本次新增 ${p.fetchedThisRun||0} 個，剩餘 ${p.remainingChunks||0} 個。頁面會自動繼續。</p></div></body></html>`;}
 
@@ -187,7 +187,7 @@ function addHeikinAshi(rows){
   });
 }
 
-function simulateV85QualityGate(f,m,h,v,mode="both",o={}){
+function simulateV86AdaptiveGate(f,m,h,v,mode="both",o={}){
   let mi=0,hi=0,pos=null,lastLongEntry=0,lastShortEntry=0;
   const trades=[],signals=[],costBps=Number(o.costBps??10);
   const diag={haBull:0,haBear:0,haTransition:0,qualityPassed:0,qualityRejected:0,biasRejected:0,stopRejected:0,busySkipped:0,breakevenArmed:0,timeStops:0};
@@ -207,20 +207,23 @@ function simulateV85QualityGate(f,m,h,v,mode="both",o={}){
     if(b.close>hi5+.03*atr)longT.push('BOS'); if(b.close<lo5-.03*atr)shortT.push('BOS');
     if(p.close<=p.ema20&&b.close>b.ema20&&b.close>b.open)longT.push('EMA_RECLAIM'); if(p.close>=p.ema20&&b.close<b.ema20&&b.close<b.open)shortT.push('EMA_REJECT');
     if(b.low<lo5&&b.close>lo5&&b.close>b.open)longT.push('SWEEP'); if(b.high>hi5&&b.close<hi5&&b.close<b.open)shortT.push('SWEEP');
-    const lCandidate=mode!=='short'&&v.id!=='V8S'&&longT.length>=3, sCandidate=mode!=='long'&&v.id!=='V8L'&&shortT.length>=3;
+    const strongTrend=b.adx>=25&&Math.abs(b.ema20-b.ema50)/atr>=0.35;
+    const longNeed=bullRouter&&strongTrend?2:(bullRouter?3:4), shortNeed=bearRouter&&strongTrend?2:(bearRouter?3:4);
+    const lCandidate=mode!=='short'&&v.id!=='V8S'&&longT.length>=longNeed, sCandidate=mode!=='long'&&v.id!=='V8L'&&shortT.length>=shortNeed;
     if(lCandidate)signals.push({ts:b.ts,side:'LONG',triggers:longT,regime}); if(sCandidate)signals.push({ts:b.ts,side:'SHORT',triggers:shortT,regime});
     if(pos){const z=manageV82Position(pos,b);if(z.beArmed)diag.breakevenArmed++;if(z.timeStop)diag.timeStops++;if(z.done){const feeR=(costBps/10000)/(pos.risk/pos.entry);trades.push({...pos,exitTs:b.ts,exitPrice:z.p,r:+(z.r-feeR).toFixed(3),exitReason:z.reason});pos=null}else{diag.busySkipped++;continue}}
     const longStrong=longT.some(x=>['BOS','SWEEP','MOMENTUM'].includes(x)),shortStrong=shortT.some(x=>['BOS','SWEEP','MOMENTUM'].includes(x));
     const fSlope20=b.ema20-(f[Math.max(0,i-3)]?.ema20??b.ema20), fSlope50=b.ema50-(f[Math.max(0,i-3)]?.ema50??b.ema50), slopeLong=fSlope20>0&&fSlope50>=0, slopeShort=fSlope20<0&&fSlope50<=0, volOK=(b.atr/b.close)>=0.0015;
-    const lQ=longT.length+(bullRouter?3:0)+(b.close>b.ema20&&b.ema20>b.ema50?1:0)+(b.adx>=18?1:0)+(b.rsi>=48&&b.rsi<=72?1:0)+(longStrong?1:0);
-    const sQ=shortT.length+(bearRouter?3:0)+(b.close<b.ema20&&b.ema20<b.ema50?1:0)+(b.adx>=18?1:0)+(b.rsi>=28&&b.rsi<=52?1:0)+(shortStrong?1:0);
-    let L=lCandidate&&bullRouter&&longStrong&&slopeLong&&volOK&&lQ>=8,S=sCandidate&&bearRouter&&shortStrong&&slopeShort&&volOK&&sQ>=8;
+    const lQ=longT.length+(bullRouter?3:0)+(b.close>b.ema20&&b.ema20>b.ema50?1:0)+(b.adx>=18?1:0)+(b.rsi>=46&&b.rsi<=74?1:0)+(longStrong?1:0)+(strongTrend?1:0);
+    const sQ=shortT.length+(bearRouter?3:0)+(b.close<b.ema20&&b.ema20<b.ema50?1:0)+(b.adx>=18?1:0)+(b.rsi>=26&&b.rsi<=54?1:0)+(shortStrong?1:0)+(strongTrend?1:0);
+    const longQNeed=strongTrend?7:8, shortQNeed=strongTrend?7:8;
+    let L=lCandidate&&bullRouter&&longStrong&&slopeLong&&volOK&&lQ>=longQNeed,S=sCandidate&&bearRouter&&shortStrong&&slopeShort&&volOK&&sQ>=shortQNeed;
     if(lCandidate&&!L){diag.qualityRejected++;if(!bullRouter)diag.biasRejected++} if(sCandidate&&!S){diag.qualityRejected++;if(!bearRouter)diag.biasRejected++}
     if(L&&b.ts-lastLongEntry>=15*60e3){const entry=f[i+1].open,structure=Math.min(...f.slice(Math.max(0,i-5),i+1).map(x=>x.low)),stop=Math.min(entry-.70*atr,structure),risk=entry-stop,stopPct=risk/entry;if(risk>0&&stopPct>=.0035&&stopPct<=.025){diag.qualityPassed++;lastLongEntry=b.ts;pos=makeV82Position('LONG',entry,risk,stop,f[i+1].ts,{quality:lQ,triggers:longT,bias:'HA BULL',regime,rsi:b.rsi,adx:b.adx})}else diag.stopRejected++}
     else if(S&&b.ts-lastShortEntry>=15*60e3){const entry=f[i+1].open,structure=Math.max(...f.slice(Math.max(0,i-5),i+1).map(x=>x.high)),stop=Math.max(entry+.70*atr,structure),risk=stop-entry,stopPct=risk/entry;if(risk>0&&stopPct>=.0035&&stopPct<=.025){diag.qualityPassed++;lastShortEntry=b.ts;pos=makeV82Position('SHORT',entry,risk,stop,f[i+1].ts,{quality:sQ,triggers:shortT,bias:'HA BEAR',regime,rsi:b.rsi,adx:b.adx})}else diag.stopRejected++}
   }
   if(pos&&f.length){const q=[...f].reverse().find(x=>x.ts<=o.tradeEndTs)||f.at(-1),d=pos.side==='LONG'?1:-1,rr=pos.real+pos.rem*((q.close-pos.entry)*d/pos.risk)-(costBps/10000)/(pos.risk/pos.entry);trades.push({...pos,exitTs:q.ts,exitPrice:q.close,r:+rr.toFixed(3),forcedClose:true,exitReason:'END'})}
-  return{variant:v.id,name:v.name.replace('V8','V8.5'),description:'1H + 15m HA Router · 5m 3-trigger Quality Gate',...summarizeTradeSequence(trades,10),diagnostics:diag,signalFrequency:summarizeSignalFrequency(signals,o.tradeStartTs,o.tradeEndTs),triggerPerformance:summarizeTriggerPerformance(trades),regimePerformance:{},recentTrades:trades.slice(-10),__trades:trades,__signals:signals};
+  return{variant:v.id,name:v.name.replace('V8','V8.6'),description:'1H + 15m HA Router · 5m Adaptive Gate · Long/Short split',...summarizeTradeSequence(trades,10),diagnostics:diag,signalFrequency:summarizeSignalFrequency(signals,o.tradeStartTs,o.tradeEndTs),triggerPerformance:summarizeTriggerPerformance(trades),regimePerformance:{},recentTrades:trades.slice(-10),__trades:trades,__signals:signals};
 }
 
 function simulateV8Sol(f,m,v,mode="both",o={}){
