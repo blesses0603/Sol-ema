@@ -15,6 +15,16 @@ export default {
       });
     }
 
+    if (u.pathname === "/backtest") {
+      try {
+        const days = Math.min(Math.max(Number(u.searchParams.get("days") || 30), 7), 60);
+        const result = await runBacktest({days});
+        return J(result);
+      } catch (e) {
+        return J({error:true,message:e?.message||String(e),time:new Date().toISOString()},500);
+      }
+    }
+
     try {
       const cache = caches.default;
       const cacheKey = new Request(new URL("/__report_cache", req.url).toString(), {method:"GET"});
@@ -262,3 +272,248 @@ function page(r){
 *{box-sizing:border-box}body{margin:0;background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif}.w{max-width:760px;margin:auto;padding:16px 12px 34px}.hero,.tfcard{background:#121925;border:1px solid #263246;border-radius:20px}.hero{padding:20px;background:linear-gradient(145deg,#182131,#121925)}.ey{color:#8995a8;font-size:12px;letter-spacing:.08em}.top{display:flex;justify-content:space-between;align-items:end;gap:12px}h1{font-size:23px;margin:7px 0}.price{font-size:36px;font-weight:800}.badge,.trend{background:#0d1420;border:1px solid #263246;border-radius:999px;padding:7px 10px;white-space:nowrap}.meta{color:#8995a8;font-size:12px;margin-top:8px}.section{font-size:18px;margin:22px 4px 10px}.tfcard{padding:16px;margin-top:10px}.tfhead{display:flex;align-items:center;justify-content:space-between;font-size:20px}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:14px}.grid div{background:#0d1420;border:1px solid #202c3f;border-radius:14px;padding:12px}.grid div:last-child{grid-column:1/-1}.grid small{display:block;color:#8995a8;font-size:11px;margin-bottom:4px}.grid b{font-size:18px;font-variant-numeric:tabular-nums}.grid em{display:block;color:#8995a8;font-size:11px;font-style:normal;margin-top:2px}.links{display:flex;gap:8px;margin-top:14px}.links a{color:#f5f7fb;text-decoration:none;background:#121925;border:1px solid #263246;padding:9px 12px;border-radius:12px}.foot{color:#8995a8;font-size:12px;line-height:1.6;margin-top:14px}@media(min-width:640px){.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px}.tfcard{margin-top:0}.grid div:last-child{grid-column:auto}}
 </style></head><body><main class="w"><section class="hero"><div class="ey">SOL TECHNICAL DASHBOARD</div><div class="top"><div><h1>SOLUSDT Perpetual</h1><div class="price">$${r.price.toFixed(2)}</div></div><div class="badge">${r.overall}</div></div><div class="meta">Bybit SOLUSDT Perpetual · 更新 <span id="t"></span></div></section><h2 class="section">多週期 EMA / RSI</h2><section class="cards">${cards}</section><div class="links"><a href="/api">API JSON</a><a href="/health">Health</a></div><div class="foot">EMA 使用 SMA seed 後標準 EMA 遞迴；RSI 使用 Wilder 平滑。技術指標來源為 Bybit SOLUSDT 永續，與 Binance SOLUSDC 實際成交價可能略有差異。</div></main><script>document.getElementById("t").textContent=new Date(${JSON.stringify(r.updatedAt)}).toLocaleString("zh-TW",{timeZone:"Asia/Taipei",hour12:false});let n=5;const m=document.querySelector(".meta");const c=document.createElement("span");c.id="count";c.textContent=" · 🔄 "+n+" 秒後更新";m.appendChild(c);const timer=setInterval(()=>{n--;c.textContent=" · 🔄 "+n+" 秒後更新";if(n<=0){clearInterval(timer);location.reload()}},1000)</script></body></html>`;
 }
+
+async function runBacktest({days=30}={}) {
+  const [m15,h1] = await Promise.all([
+    fetchOkxHistory("15m", days),
+    fetchOkxHistory("1H", days)
+  ]);
+
+  const tf1h = buildIndicators(h1);
+  const tf15 = buildIndicators(m15);
+
+  const variants = [
+    {
+      id:"A",
+      name:"Strict",
+      description:"1H EMA20/50/200 + ADX; 15m pullback + RSI + MACD + volume + breakout"
+    },
+    {
+      id:"B",
+      name:"Balanced",
+      description:"Same 1H trend; 15m pullback + RSI + breakout, with MACD OR volume confirmation"
+    },
+    {
+      id:"C",
+      name:"Trend",
+      description:"Stronger 1H trend filter; looser 15m trigger using pullback + breakout + momentum confirmation"
+    }
+  ];
+
+  const results = variants.map(v => simulateVariant(tf15, tf1h, v));
+  const byNetR = [...results].sort((a,b)=>b.netR-a.netR)[0]?.variant || null;
+  const byPF = [...results].sort((a,b)=>b.profitFactor-a.profitFactor)[0]?.variant || null;
+  const byDD = [...results].sort((a,b)=>a.maxDrawdownPct-b.maxDrawdownPct)[0]?.variant || null;
+
+  return {
+    ok:true,
+    symbol:"SOL-USDT-SWAP",
+    source:"OKX",
+    mode:"ABC synchronized comparison",
+    days,
+    candles:{m15:m15.length,h1:h1.length},
+    sharedRules:{
+      entry:"signal candle closes; enter next candle open",
+      stop:"1.5 ATR",
+      tp1:"1R / 30%",
+      tp2:"2R / 30%",
+      runner:"40% with 1.5 ATR trailing",
+      riskPerTradePct:0.5,
+      volatilityCooldown:"1h if >3 ATR or >4%; 4h if >7%",
+      sameBarConflict:"stop first (conservative)"
+    },
+    leaderboard:{bestByNetR:byNetR,bestByProfitFactor:byPF,lowestDrawdown:byDD},
+    results
+  };
+}
+
+function simulateVariant(tf15, tf1h, variant) {
+  const h1ByTs = tf1h.map(x => [x.ts, x]);
+  let hIdx = 0;
+  let equity = 100, peak = 100, maxDD = 0;
+  let wins = 0, losses = 0, breakeven = 0;
+  let grossWinR = 0, grossLossR = 0;
+  let maxLossStreak = 0, lossStreak = 0;
+  let cooldownUntil = 0;
+  let pos = null;
+  const trades = [];
+
+  for (let i = 220; i < tf15.length - 1; i++) {
+    const b = tf15[i], prev = tf15[i-1];
+    while (hIdx + 1 < h1ByTs.length && h1ByTs[hIdx+1][0] <= b.ts) hIdx++;
+    const h = h1ByTs[hIdx]?.[1];
+    if (!h || !Number.isFinite(h.ema200) || !Number.isFinite(h.adx) || !Number.isFinite(b.atr) || !Number.isFinite(b.rsi)) continue;
+
+    const barMovePct = (b.high - b.low) / b.open * 100;
+    if ((b.high - b.low) > b.atr * 3 || barMovePct > 4) {
+      cooldownUntil = Math.max(cooldownUntil, b.ts + (barMovePct > 7 ? 4*3600e3 : 3600e3));
+    }
+
+    if (pos) {
+      const outcome = managePosition(pos, b);
+      if (outcome.done) {
+        const r = outcome.totalR;
+        equity *= (1 + 0.005 * r);
+        peak = Math.max(peak, equity);
+        maxDD = Math.max(maxDD, (peak - equity) / peak * 100);
+        if (r > 0.02) { wins++; grossWinR += r; lossStreak = 0; }
+        else if (r < -0.02) { losses++; grossLossR += -r; lossStreak++; maxLossStreak = Math.max(maxLossStreak, lossStreak); }
+        else { breakeven++; lossStreak = 0; }
+        trades.push({...pos, exitTs:b.ts, exitPrice:outcome.exitPrice, r:+r.toFixed(3)});
+        pos = null;
+      }
+      continue;
+    }
+
+    if (b.ts < cooldownUntil) continue;
+    if (lossStreak >= 3) continue;
+
+    const longBase = h.ema20 > h.ema50 && h.ema50 > h.ema200 && h.close > h.ema200;
+    const shortBase = h.ema20 < h.ema50 && h.ema50 < h.ema200 && h.close < h.ema200;
+    const longTrend = longBase && h.adx >= (variant.id === "C" ? 25 : 20);
+    const shortTrend = shortBase && h.adx >= (variant.id === "C" ? 25 : 20);
+
+    const volOK = Number.isFinite(b.volMA20) && b.volume > b.volMA20 * 1.1;
+    const pullbackLong = b.low <= b.ema20 && b.close >= b.ema50;
+    const pullbackShort = b.high >= b.ema20 && b.close <= b.ema50;
+    const recent = tf15.slice(Math.max(0,i-6),i+1);
+    const recentRSI = recent.map(x=>x.rsi).filter(Number.isFinite);
+    const rsiLong = prev.rsi < 52 && b.rsi >= 52 && recentRSI.length && Math.min(...recentRSI) < 50;
+    const rsiShort = prev.rsi > 48 && b.rsi <= 48 && recentRSI.length && Math.max(...recentRSI) > 50;
+    const macdLong = b.macdHist > 0 && b.macdHist > prev.macdHist;
+    const macdShort = b.macdHist < 0 && b.macdHist < prev.macdHist;
+    const breakLong = b.close > prev.high;
+    const breakShort = b.close < prev.low;
+
+    let longSignal = false, shortSignal = false;
+    if (variant.id === "A") {
+      longSignal = longTrend && pullbackLong && rsiLong && macdLong && volOK && breakLong;
+      shortSignal = shortTrend && pullbackShort && rsiShort && macdShort && volOK && breakShort;
+    } else if (variant.id === "B") {
+      longSignal = longTrend && pullbackLong && rsiLong && breakLong && (macdLong || volOK);
+      shortSignal = shortTrend && pullbackShort && rsiShort && breakShort && (macdShort || volOK);
+    } else {
+      const momentumLong = b.rsi >= 50 && (macdLong || volOK);
+      const momentumShort = b.rsi <= 50 && (macdShort || volOK);
+      longSignal = longTrend && pullbackLong && breakLong && momentumLong;
+      shortSignal = shortTrend && pullbackShort && breakShort && momentumShort;
+    }
+
+    const side = longSignal ? "LONG" : shortSignal ? "SHORT" : null;
+    if (!side) continue;
+
+    const next = tf15[i+1];
+    const entry = next.open;
+    const risk = b.atr * 1.5;
+    if (!(risk > 0)) continue;
+    pos = makePosition(side, entry, risk, next.ts);
+  }
+
+  const total = trades.length;
+  const pf = grossLossR > 0 ? grossWinR / grossLossR : (grossWinR > 0 ? 999 : 0);
+  const netR = trades.reduce((a,t)=>a+t.r,0);
+  return {
+    variant:variant.id,
+    name:variant.name,
+    description:variant.description,
+    trades:total,
+    wins,losses,breakeven,
+    winRate:total ? +(wins/total*100).toFixed(2) : 0,
+    profitFactor:+pf.toFixed(2),
+    netR:+netR.toFixed(2),
+    endingEquity:+equity.toFixed(2),
+    maxDrawdownPct:+maxDD.toFixed(2),
+    maxLossStreak,
+    recentTrades:trades.slice(-10).map(t=>({side:t.side,entryTs:t.entryTs,exitTs:t.exitTs,entry:+t.entry.toFixed(4),exit:+t.exitPrice.toFixed(4),r:t.r}))
+  };
+}
+
+function makePosition(side, entry, risk, entryTs) {
+  const dir = side === "LONG" ? 1 : -1;
+  return {
+    side, entry, entryTs, risk,
+    stop: entry - dir*risk,
+    tp1: entry + dir*risk,
+    tp2: entry + dir*risk*2,
+    remaining: 1,
+    realizedR: 0,
+    movedBE: false,
+    tp1Hit: false,
+    tp2Hit: false,
+    trail: null
+  };
+}
+
+function managePosition(p, b) {
+  const long = p.side === "LONG";
+  const hitStop = long ? b.low <= p.stop : b.high >= p.stop;
+  if (hitStop) {
+    const stopR = p.movedBE ? 0 : -1;
+    return {done:true,totalR:p.realizedR + p.remaining*stopR,exitPrice:p.stop};
+  }
+
+  if (!p.tp1Hit) {
+    const hit = long ? b.high >= p.tp1 : b.low <= p.tp1;
+    if (hit) {
+      p.tp1Hit = true; p.realizedR += 0.3; p.remaining -= 0.3; p.stop = p.entry; p.movedBE = true;
+    }
+  }
+  if (!p.tp2Hit) {
+    const hit = long ? b.high >= p.tp2 : b.low <= p.tp2;
+    if (hit) {
+      p.tp2Hit = true; p.realizedR += 0.6; p.remaining -= 0.3;
+      p.trail = long ? b.close - 1.5*b.atr : b.close + 1.5*b.atr;
+    }
+  }
+
+  if (p.tp2Hit) {
+    const newTrail = long ? b.close - 1.5*b.atr : b.close + 1.5*b.atr;
+    p.trail = p.trail == null ? newTrail : (long ? Math.max(p.trail,newTrail) : Math.min(p.trail,newTrail));
+    const hitTrail = long ? b.low <= p.trail : b.high >= p.trail;
+    if (hitTrail) {
+      const runnerR = long ? (p.trail-p.entry)/p.risk : (p.entry-p.trail)/p.risk;
+      return {done:true,totalR:p.realizedR + p.remaining*runnerR,exitPrice:p.trail};
+    }
+  }
+  return {done:false};
+}
+
+async function fetchOkxHistory(bar, days) {
+  const ms = bar === "15m" ? 15*60e3 : 60*60e3;
+  const target = Math.ceil(days*24*60*60e3/ms) + 260;
+  let out = [];
+  let after = null;
+  while (out.length < target) {
+    let url = `https://www.okx.com/api/v5/market/history-candles?instId=SOL-USDT-SWAP&bar=${encodeURIComponent(bar)}&limit=300`;
+    if (after) url += `&after=${after}`;
+    const r = await fetch(url,{headers:{"accept":"application/json","user-agent":"Mozilla/5.0 SOL-Backtest/1.0"}});
+    if (!r.ok) throw new Error(`OKX history ${bar} HTTP ${r.status}`);
+    const j = await r.json();
+    if (j.code !== "0" || !Array.isArray(j.data) || !j.data.length) throw new Error(`OKX history ${bar} invalid response`);
+    const batch = j.data.map(x => ({
+      ts:Number(x[0]), open:Number(x[1]), high:Number(x[2]), low:Number(x[3]), close:Number(x[4]), volume:Number(x[5])
+    })).filter(x => Object.values(x).every(Number.isFinite));
+    out.push(...batch);
+    after = String(batch[batch.length-1].ts);
+    if (batch.length < 100) break;
+  }
+  const uniq = new Map(out.map(x=>[x.ts,x]));
+  return [...uniq.values()].sort((a,b)=>a.ts-b.ts).slice(-target);
+}
+
+function buildIndicators(rows) {
+  const c = rows.map(x=>x.close), h = rows.map(x=>x.high), l = rows.map(x=>x.low), v = rows.map(x=>x.volume);
+  const e20 = emaSeries(c,20), e50 = emaSeries(c,50), e200 = emaSeries(c,200);
+  const r = rsiSeries(c,14), atr = atrSeries(h,l,c,14), adx = adxSeries(h,l,c,14);
+  const fast=emaSeries(c,12), slow=emaSeries(c,26);
+  const macd = c.map((_,i)=>Number.isFinite(fast[i])&&Number.isFinite(slow[i])?fast[i]-slow[i]:NaN);
+  const signal=emaSeries(macd.map(x=>Number.isFinite(x)?x:0),9);
+  const volMA=smaSeries(v,20);
+  return rows.map((x,i)=>({...x,ema20:e20[i],ema50:e50[i],ema200:e200[i],rsi:r[i],atr:atr[i],adx:adx[i],macdHist:Number.isFinite(macd[i])&&Number.isFinite(signal[i])?macd[i]-signal[i]:NaN,volMA20:volMA[i]}));
+}
+
+function smaSeries(v,p){const o=Array(v.length).fill(NaN);let s=0;for(let i=0;i<v.length;i++){s+=v[i];if(i>=p)s-=v[i-p];if(i>=p-1)o[i]=s/p;}return o}
+function emaSeries(v,p){const o=Array(v.length).fill(NaN);if(v.length<p)return o;let seed=0;for(let i=0;i<p;i++)seed+=v[i];let x=seed/p;o[p-1]=x;const k=2/(p+1);for(let i=p;i<v.length;i++){x=v[i]*k+x*(1-k);o[i]=x;}return o}
+function rsiSeries(v,p=14){const o=Array(v.length).fill(NaN);if(v.length<=p)return o;let g=0,lo=0;for(let i=1;i<=p;i++){const d=v[i]-v[i-1];g+=Math.max(d,0);lo+=Math.max(-d,0)}g/=p;lo/=p;o[p]=lo===0?100:100-100/(1+g/lo);for(let i=p+1;i<v.length;i++){const d=v[i]-v[i-1];g=(g*(p-1)+Math.max(d,0))/p;lo=(lo*(p-1)+Math.max(-d,0))/p;o[i]=lo===0?100:100-100/(1+g/lo)}return o}
+function atrSeries(h,l,c,p=14){const tr=Array(c.length).fill(NaN);for(let i=1;i<c.length;i++)tr[i]=Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1]));const o=Array(c.length).fill(NaN);if(c.length<=p)return o;let a=0;for(let i=1;i<=p;i++)a+=tr[i];a/=p;o[p]=a;for(let i=p+1;i<c.length;i++){a=(a*(p-1)+tr[i])/p;o[i]=a}return o}
+function adxSeries(h,l,c,p=14){const n=c.length,tr=Array(n).fill(0),pd=Array(n).fill(0),md=Array(n).fill(0);for(let i=1;i<n;i++){tr[i]=Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1]));const up=h[i]-h[i-1],dn=l[i-1]-l[i];pd[i]=up>dn&&up>0?up:0;md[i]=dn>up&&dn>0?dn:0}const o=Array(n).fill(NaN);if(n<2*p+2)return o;let trS=0,pS=0,mS=0;for(let i=1;i<=p;i++){trS+=tr[i];pS+=pd[i];mS+=md[i]}const dx=Array(n).fill(NaN);for(let i=p;i<n;i++){if(i>p){trS=trS-trS/p+tr[i];pS=pS-pS/p+pd[i];mS=mS-mS/p+md[i]}const pdi=trS?100*pS/trS:0,mdi=trS?100*mS/trS:0;dx[i]=(pdi+mdi)?100*Math.abs(pdi-mdi)/(pdi+mdi):0}let a=0;for(let i=p;i<2*p;i++)a+=dx[i];a/=p;o[2*p-1]=a;for(let i=2*p;i<n;i++){a=(a*(p-1)+dx[i])/p;o[i]=a}return o}
