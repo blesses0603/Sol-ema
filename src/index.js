@@ -2,49 +2,106 @@ const SYMBOL="SOLUSDT", BASE="https://api.bybit.com/v5/market/kline";
 const SHEET_WEBAPP="https://script.google.com/macros/s/AKfycbyM5J9mLarf3KUKR9kPCsgFUJL4sLxo3kHttRKIBT_QywpSp6_lQOw8rVHRmG1VUHtWFw/exec";
 const TFS=[["4h","4H","240"],["1h","1H","60"],["30m","30m","30"],["15m","15m","15"]];
 
-export default {async fetch(req){
-  const u=new URL(req.url);
-  if(u.pathname==="/health") return J({ok:true,service:"SOL Technical Dashboard",sheetSync:"enabled",sheetWebApp:true,time:new Date().toISOString()});
-  try{
-    const cache = caches.default;
-    const cacheKey = new Request(new URL("/__report_cache", req.url).toString(), {method:"GET"});
-    let cached = await cache.match(cacheKey);
-    let report;
-    if (cached) {
-      report = await cached.json();
-    } else {
-      const data={};
-      for(const [key,label,interval] of TFS) data[key]=await calc(label,interval);
-      const score=Object.values(data).reduce((a,x)=>a+x.score,0);
-      const overall=score>=6?"🟢 強多":score>=2?"🟢 偏多":score<=-6?"🔴 強空":score<=-2?"🔴 偏空":"🟡 震盪";
-      report={symbol:SYMBOL,source:"Bybit SOLUSDT Perpetual",updatedAt:new Date().toISOString(),price:data["15m"].close,overall,data};
-      await cache.put(cacheKey, new Response(JSON.stringify(report), {
-        headers: {"content-type":"application/json","cache-control":"public, max-age=5"}
-      }));
-
-      // Sync to Google Sheet at most once per minute.
-      const syncKey = new Request(new URL("/__sheet_sync_marker", req.url).toString(), {method:"GET"});
-      const syncMarker = await cache.match(syncKey);
-      if (!syncMarker) {
-        try {
-          await fetch(SHEET_WEBAPP, {
-            method: "POST",
-            headers: {"content-type":"application/json"},
-            body: JSON.stringify(report)
-          });
-          await cache.put(syncKey, new Response("ok", {
-            headers: {"cache-control":"public, max-age=60"}
-          }));
-        } catch (e) {
-          console.log("Sheet sync failed:", e?.message || String(e));
-        }
-      }
+export default {
+  async fetch(req) {
+    const u = new URL(req.url);
+    if (u.pathname === "/health") {
+      return J({
+        ok: true,
+        service: "SOL Technical Dashboard",
+        sheetSync: "enabled",
+        cron: "every minute",
+        time: new Date().toISOString()
+      });
     }
-    if(u.pathname==="/api") return J(report);
-    if(u.pathname!=="/") return J({error:true,message:"Not found"},404);
-    return new Response(page(report),{headers:{"content-type":"text/html; charset=UTF-8","cache-control":"no-store"}});
-  }catch(e){return J({error:true,message:e?.message||String(e),time:new Date().toISOString()},500)}
-}};
+
+    try {
+      const cache = caches.default;
+      const cacheKey = new Request(new URL("/__report_cache", req.url).toString(), {method:"GET"});
+      let cached = await cache.match(cacheKey);
+      let report;
+
+      if (cached) {
+        report = await cached.json();
+      } else {
+        report = await buildReport();
+        await cache.put(cacheKey, new Response(JSON.stringify(report), {
+          headers: {"content-type":"application/json","cache-control":"public, max-age=5"}
+        }));
+      }
+
+      // HTTP access may also sync, but no more than once per minute.
+      await syncSheetOncePerMinute(report, req.url);
+
+      if (u.pathname === "/api") return J(report);
+      if (u.pathname !== "/") return J({error:true,message:"Not found"},404);
+
+      return new Response(page(report), {
+        headers: {
+          "content-type":"text/html; charset=UTF-8",
+          "cache-control":"no-store"
+        }
+      });
+    } catch (e) {
+      return J({error:true,message:e?.message||String(e),time:new Date().toISOString()},500);
+    }
+  },
+
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil((async () => {
+      try {
+        const report = await buildReport();
+        const res = await fetch(SHEET_WEBAPP, {
+          method: "POST",
+          headers: {"content-type":"application/json"},
+          body: JSON.stringify(report)
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(`Google Sheet HTTP ${res.status}: ${text.slice(0,200)}`);
+        console.log("Cron sheet sync OK", report.updatedAt, text.slice(0,200));
+      } catch (e) {
+        console.log("Cron sheet sync failed:", e?.message || String(e));
+        throw e;
+      }
+    })());
+  }
+};
+
+async function buildReport() {
+  const data = {};
+  for (const [key,label,interval] of TFS) data[key] = await calc(label,interval);
+  const score = Object.values(data).reduce((a,x)=>a+x.score,0);
+  const overall = score>=6?"🟢 強多":score>=2?"🟢 偏多":score<=-6?"🔴 強空":score<=-2?"🔴 偏空":"🟡 震盪";
+  return {
+    symbol: SYMBOL,
+    source: "Bybit SOLUSDT Perpetual",
+    updatedAt: new Date().toISOString(),
+    price: data["15m"].close,
+    overall,
+    data
+  };
+}
+
+async function syncSheetOncePerMinute(report, requestUrl) {
+  const cache = caches.default;
+  const syncKey = new Request(new URL("/__sheet_sync_marker", requestUrl).toString(), {method:"GET"});
+  const marker = await cache.match(syncKey);
+  if (marker) return;
+
+  try {
+    const res = await fetch(SHEET_WEBAPP, {
+      method: "POST",
+      headers: {"content-type":"application/json"},
+      body: JSON.stringify(report)
+    });
+    if (!res.ok) throw new Error(`Google Sheet HTTP ${res.status}`);
+    await cache.put(syncKey, new Response("ok", {
+      headers: {"cache-control":"public, max-age=60"}
+    }));
+  } catch (e) {
+    console.log("HTTP sheet sync failed:", e?.message || String(e));
+  }
+}
 
 async function calc(label,interval){
   const r=await fetch(`${BASE}?category=linear&symbol=${SYMBOL}&interval=${interval}&limit=500`,{headers:{Accept:"application/json"}});
