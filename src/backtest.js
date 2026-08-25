@@ -34,7 +34,7 @@ export async function handleBacktestRequest(req, env, ctx){
 
     const cache=caches.default;
     const cacheKey=new Request(
-      new URL(`/__backtest_v734_entrydiag_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
+      new URL(`/__backtest_v735_entrydiag_result?symbol=${symbol}&days=${days}&mode=${mode}&leverage=10&strategy=${strategy}&costbps=${costBps}&stop=${stopMode}`,req.url).toString(),
       {method:"GET"}
     );
 
@@ -79,7 +79,7 @@ const BT_MAX_CHUNKS_PER_INVOCATION = 2;
 async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=10,strategy="swing",costBps=8,stopMode="C",requestUrl}={}){
   const now=Date.now(), coreStart=now-days*86400e3, dataStart=coreStart-BT_WARMUP_MS;
   const prep=await ensureHistoryBundles(dataStart,now,requestUrl,symbol);
-  if(!prep.complete) return {pending:true,version:"7.3.4-entry-diagnostics",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
+  if(!prep.complete) return {pending:true,version:"7.3.5-entry-diagnostics",symbol,leverage:10,strategy,costBps,stopMode,days,tradeMode:mode,progress:prep};
   const raw=await loadHistoryRange(dataStart,now,requestUrl,symbol);
   let results, variants;
   if(strategy==="short"){
@@ -102,7 +102,7 @@ async function runBacktestStaged({days=30,mode="both",symbol="SOLUSDT",leverage=
   }
   results=results.map(applyPositionSizing);
   const eligible=results.filter(x=>x.trades>=5);
-  return {ok:true,symbol,version:"7.3.4-entry-diagnostics",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
+  return {ok:true,symbol,version:"7.3.5-entry-diagnostics",strategy,costBps,stopMode,days,tradeMode:mode,leverage:10,
     positionSizing:{initialEquity:100,fixedMargin:5,leverage:10,baseNotional:50,winNextMarginPct:5,rule:"第一單/上一單非盈利：固定5U保證金；上一單盈利：下一單使用當前本金5%作保證金"},
     sharedRules:strategy==="short"?{
       regime:"V7.3.2 HA Router: 1H Heikin Ashi + 15m Heikin Ashi/structure; two consecutive 15m confirmations; Transition/Chop = no trade",
@@ -174,6 +174,11 @@ function backtestPage(r){
      const result=rVal>0.02?"盈利":rVal<-.02?"虧損":"打平";
      const resultClass=rVal>0.02?"p":rVal<-.02?"n":"";
      const stop=t.initialStop??t.stop;
+     const ed=t.entryDiag||{};
+     const haClass=v=>v==="Bull"?"p":v==="Bear"?"n":"";
+     const emaText=Number.isFinite(Number(ed.ema20))&&Number.isFinite(Number(ed.ema50))?`${num(ed.ema20,2)} / ${num(ed.ema50,2)}`:"-";
+     const retestText=ed.retest===true?"✓":ed.retest===false?"✗":"-";
+     const sweepText=ed.hadSweep===true?"✓":ed.hadSweep===false?"✗":"-";
      return `<tr>
        <td>${i+1}</td>
        <td>${fmtTs(t.entryTs)}</td>
@@ -184,12 +189,21 @@ function backtestPage(r){
        <td class="${resultClass}">${rVal>=0?"+":""}${num(rVal,2)}R</td>
        <td class="${pnl>=0?"p":"n"}">${pnl>=0?"+":""}${num(pnl,3)}U</td>
        <td class="${resultClass}">${result}${t.forcedClose?"*":""}</td>
+       <td class="${haClass(ed.ha1h)}">${ed.ha1h||"-"}</td>
+       <td class="${haClass(ed.ha15m)}">${ed.ha15m||"-"}</td>
+       <td>${emaText}</td>
+       <td>${num(ed.adx,1)}</td>
+       <td>${num(ed.rsi,1)}</td>
+       <td>${num(ed.macdHist,4)}</td>
+       <td>${num(ed.bosLevel,4)}</td>
+       <td>${retestText}</td>
+       <td>${sweepText}</td>
      </tr>`;
    }).join('');
    const tradeTable=tradeRows?`<div class="tradebox">
      <div class="tradehead">逐筆交易 <small>時間為台灣時間；* = 回測期末強制平倉</small></div>
      <div class="scroll"><table>
-       <thead><tr><th>#</th><th>時間</th><th>方向</th><th>Entry</th><th>Stop</th><th>Exit</th><th>R</th><th>PnL</th><th>結果</th><th>1H HA</th><th>15m HA</th><th>EMA20/50</th><th>ADX</th><th>RSI</th><th>MACD</th><th>BOS Level</th><th>Retest</th></tr></thead>
+       <thead><tr><th>#</th><th>時間</th><th>方向</th><th>Entry</th><th>Stop</th><th>Exit</th><th>R</th><th>PnL</th><th>結果</th><th>1H HA</th><th>15m HA</th><th>EMA20/50</th><th>ADX</th><th>RSI</th><th>MACD</th><th>BOS Level</th><th>Retest</th><th>Sweep</th></tr></thead>
        <tbody>${tradeRows}</tbody>
      </table></div>
    </div>`:`<div class="empty">此策略區間沒有交易。</div>`;
@@ -221,7 +235,7 @@ function backtestPage(r){
    </section>`
  }).join('');
  return`<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
- <title>${r.symbol} V7.3.4 Entry Diagnostics</title>
+ <title>${r.symbol} V7.3.5 Entry Diagnostics</title>
  <style>
  *{box-sizing:border-box}
  body{background:#0b0f17;color:#f5f7fb;font-family:system-ui,-apple-system,sans-serif;margin:0;padding:6px}
@@ -256,7 +270,7 @@ function backtestPage(r){
  .tradehead{font-size:10px;font-weight:700;color:#d7deea;margin-bottom:5px}
  .tradehead small{font-weight:400;color:#8190a6;margin-left:4px}
  .scroll{overflow:auto;max-height:360px;border:1px solid #202d42;border-radius:8px;background:#0b1420}
- table{border-collapse:collapse;width:100%;min-width:1180px;font-size:9px}
+ table{border-collapse:collapse;width:100%;min-width:1320px;font-size:9px}
  th,td{padding:6px 7px;text-align:right;border-bottom:1px solid #1e2a3d;white-space:nowrap}
  th{position:sticky;top:0;background:#101b29;color:#8190a6;font-weight:700;z-index:1}
  th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){text-align:left}
@@ -265,7 +279,7 @@ function backtestPage(r){
  @media(min-width:520px){.g{grid-template-columns:repeat(5,minmax(0,1fr))}.diag{grid-template-columns:repeat(6,minmax(0,1fr))}}
  </style></head><body><main class="wrap">
  <section class="hero">
-   <div class="ey">V7.3.4 ENTRY DIAG · ${r.symbol} · 固定10x</div>
+   <div class="ey">V7.3.5 ENTRY DIAG · ${r.symbol} · 固定10x</div>
    <h1>${r.strategy==='short'?'⚡ 短線 Structure Engine':'🧭 波段（凍結）'}</h1>
    <div class="sub">${r.days}天 · 100U本金 · 5U保證金 · 10x · 成本 ${r.costBps}bps</div>
    <div class="ctl">
